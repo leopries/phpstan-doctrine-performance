@@ -1,0 +1,99 @@
+parametersSchema:
+    doctrinePerformance: structure([
+        minimumSeverity: string()
+        severityTip: bool()
+        tableStatsFile: schema(string(), nullable())
+        smallTableRows: int()
+        largeTableRows: int()
+        hotPaths: listOf(string())
+        testPaths: listOf(string())
+        reportTests: bool()
+        ignoredMethods: listOf(string())
+        maxImplementations: int()
+    ])
+
+parameters:
+    doctrinePerformance:
+        # Findings below this level are not reported: info, low, medium, high or critical.
+        minimumSeverity: info
+        severityTip: true
+        # JSON written by bin/doctrine-table-stats; row counts refine the severity.
+        tableStatsFile: null
+        smallTableRows: 200
+        largeTableRows: 100000
+        # Regular expressions matched against the file path.
+        hotPaths:
+            - '#/Controller/#'
+        testPaths:
+            - '#/[Tt]ests?/#'
+        # Tests loop over fixtures on purpose and repeat what production code already shows.
+        reportTests: false
+        # Methods known not to query per call (cached lookups), as Class::method.
+        ignoredMethods: []
+        # Calls through an interface with more implementations than this are not followed.
+        maxImplementations: 5
+
+services:
+    -
+        class: Leopries\PHPStanDoctrinePerformance\LoopDepthVisitor
+        tags:
+            - phpstan.parser.richParserNodeVisitor
+    -
+        class: Leopries\PHPStanDoctrinePerformance\FetchedAssociations
+        arguments:
+            parser: @currentPhpVersionSimpleDirectParser
+    - Leopries\PHPStanDoctrinePerformance\LoopBounds
+    - Leopries\PHPStanDoctrinePerformance\QueryCalls
+    - Leopries\PHPStanDoctrinePerformance\AssociationAccess
+    - Leopries\PHPStanDoctrinePerformance\ProjectCallees
+    -
+        class: Leopries\PHPStanDoctrinePerformance\Severity
+        arguments:
+            minimumSeverity: %doctrinePerformance.minimumSeverity%
+            severityTip: %doctrinePerformance.severityTip%
+            tableStatsFile: %doctrinePerformance.tableStatsFile%
+            smallTableRows: %doctrinePerformance.smallTableRows%
+            largeTableRows: %doctrinePerformance.largeTableRows%
+            hotPaths: %doctrinePerformance.hotPaths%
+            testPaths: %doctrinePerformance.testPaths%
+            reportTests: %doctrinePerformance.reportTests%
+    -
+        class: Leopries\PHPStanDoctrinePerformance\DoctrineQueryInLoopRule
+        tags:
+            - phpstan.rules.rule
+    -
+        class: Leopries\PHPStanDoctrinePerformance\CallGraphCollector
+        tags:
+            - phpstan.collector
+    -
+        class: Leopries\PHPStanDoctrinePerformance\ClassHierarchyCollector
+        tags:
+            - phpstan.collector
+    -
+        class: Leopries\PHPStanDoctrinePerformance\ParameterAssociationCollector
+        tags:
+            - phpstan.collector
+    -
+        class: Leopries\PHPStanDoctrinePerformance\EntityArgumentCollector
+        tags:
+            - phpstan.collector
+    -
+        class: Leopries\PHPStanDoctrinePerformance\IndirectLazyAssociationRule
+        arguments:
+            ignoredMethods: %doctrinePerformance.ignoredMethods%
+            maxImplementations: %doctrinePerformance.maxImplementations%
+        tags:
+            - phpstan.rules.rule
+    -
+        class: Leopries\PHPStanDoctrinePerformance\IndirectQueryInLoopRule
+        arguments:
+            ignoredMethods: %doctrinePerformance.ignoredMethods%
+            maxImplementations: %doctrinePerformance.maxImplementations%
+        tags:
+            - phpstan.rules.rule
+    errorFormatter.doctrinePerformance:
+        class: Leopries\PHPStanDoctrinePerformance\SeverityErrorFormatter
+    errorFormatter.doctrinePerformanceJson:
+        class: Leopries\PHPStanDoctrinePerformance\SeverityJsonErrorFormatter
+    errorFormatter.doctrinePerformanceMarkdown:
+        class: Leopries\PHPStanDoctrinePerformance\SeverityMarkdownErrorFormatter

@@ -1,0 +1,48 @@
+{
+    "name": "leopries/phpstan-doctrine-performance",
+    "description": "PHPStan rules that find Doctrine N+1 and N×M query patterns, rank them by severity and group them by cause.",
+    "type": "phpstan-extension",
+    "license": "MIT",
+    "keywords": ["phpstan", "doctrine", "orm", "n+1", "performance", "static analysis"],
+    "require": {
+        "php": "^8.4",
+        "doctrine/orm": "^3.0",
+        "phpstan/phpstan": "^2.1",
+        "phpstan/phpstan-doctrine": "^2.0"
+    },
+    "require-dev": {
+        "phpstan/phpstan-strict-rules": "^2.1",
+        "phpunit/phpunit": "^11.5 || ^12.0"
+    },
+    "suggest": {
+        "phpstan/extension-installer": "Registers the extension automatically"
+    },
+    "autoload": {
+        "psr-4": {
+            "Leopries\\PHPStanDoctrinePerformance\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Leopries\\PHPStanDoctrinePerformance\\Tests\\": "tests/"
+        }
+    },
+    "bin": [
+        "bin/doctrine-table-stats"
+    ],
+    "extra": {
+        "phpstan": {
+            "includes": [
+                "extension.neon"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse --memory-limit=1G",
+        "check": ["@test", "@stan"]
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

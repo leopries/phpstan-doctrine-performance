@@ -1,0 +1,50 @@
+#!/usr/bin/env php
+<?php declare(strict_types=1);
+
+/*
+ * Writes approximate table row counts as JSON for doctrinePerformance.tableStatsFile.
+ *
+ * Usage: DATABASE_URL=mysql://user:pass@host/db vendor/bin/doctrine-table-stats > doctrine-table-stats.json
+ *
+ * Reads the engine's own statistics (no COUNT(*), safe on a production replica). Counts are rounded to two
+ * significant digits so that the committed file only changes when a table changes in magnitude.
+ */
+
+use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Platforms\AbstractMySQLPlatform;
+use Doctrine\DBAL\Platforms\PostgreSQLPlatform;
+use Doctrine\DBAL\Tools\DsnParser;
+
+foreach ([__DIR__.'/../../../autoload.php', __DIR__.'/../vendor/autoload.php', getcwd().'/vendor/autoload.php'] as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+$url = $argv[1] ?? getenv('DATABASE_URL');
+if (!is_string($url) || '' === $url) {
+    fwrite(\STDERR, "Pass the database URL as the first argument or in DATABASE_URL.\n");
+    exit(1);
+}
+
+$connection = DriverManager::getConnection((new DsnParser(['mysql' => 'pdo_mysql', 'mariadb' => 'pdo_mysql', 'postgresql' => 'pdo_pgsql', 'postgres' => 'pdo_pgsql']))->parse($url));
+$platform = $connection->getDatabasePlatform();
+if ($platform instanceof AbstractMySQLPlatform) {
+    $sql = 'SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = \'BASE TABLE\'';
+} elseif ($platform instanceof PostgreSQLPlatform) {
+    $sql = 'SELECT c.relname, GREATEST(c.reltuples, 0) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = \'r\' AND n.nspname = ANY (current_schemas(false))';
+} else {
+    fwrite(\STDERR, 'Unsupported platform '.$platform::class.". Only MySQL, MariaDB and PostgreSQL are supported.\n");
+    exit(1);
+}
+
+$tables = [];
+foreach ($connection->fetchAllNumeric($sql) as [$table, $rows]) {
+    $rows = (int) $rows;
+    $magnitude = 10 ** max(0, (int) floor(log10(max(1, $rows))) - 1);
+    $tables[(string) $table] = (int) (round($rows / $magnitude) * $magnitude);
+}
+ksort($tables);
+
+echo json_encode(['tables' => $tables], \JSON_PRETTY_PRINT | \JSON_THROW_ON_ERROR), "\n";

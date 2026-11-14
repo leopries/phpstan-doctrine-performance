@@ -1,0 +1,7 @@
+includes:
+    - ../extension.neon
+
+parameters:
+    doctrinePerformance:
+        severityTip: false
+        reportTests: true
