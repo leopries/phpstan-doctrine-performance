@@ -3,7 +3,7 @@
     "description": "PHPStan rules that find Doctrine N+1 and N×M query patterns, rank them by severity and group them by cause.",
     "type": "phpstan-extension",
     "license": "MIT",
-    "keywords": ["phpstan", "doctrine", "orm", "n+1", "performance", "static analysis"],
+    "keywords": ["phpstan", "doctrine", "orm", "n-plus-one", "performance", "static analysis"],
     "require": {
         "php": "^8.4",
         "doctrine/orm": "^3.0",
