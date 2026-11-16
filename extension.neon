@@ -39,6 +39,10 @@ services:
         tags:
             - phpstan.parser.richParserNodeVisitor
     -
+        class: Leopries\PHPStanDoctrinePerformance\CachedQueryVisitor
+        tags:
+            - phpstan.parser.richParserNodeVisitor
+    -
         class: Leopries\PHPStanDoctrinePerformance\FetchedAssociations
         arguments:
             parser: @currentPhpVersionSimpleDirectParser

@@ -53,6 +53,14 @@ final class IndirectQueryInLoopRuleTest extends RuleTestCase
         ]);
     }
 
+    public function testCachedQueries(): void
+    {
+        // readOnlyByTeam() and findByTeamCached() read through the result cache and the second-level cache.
+        $this->analyse([__DIR__.'/fixtures/cached-indirect.php'], [
+            ['Call to HistoryRepository::byTeam() inside a loop executes a Doctrine query. Batch the work or fetch the data before the loop.', 50, 'Runs getResult(); potential N+1 queries. Severity medium (50/100) = 50 one query per iteration.'],
+        ]);
+    }
+
     public function testValueFlow(): void
     {
         $message = static fn (string $method): string => \sprintf('Call to %s() inside a loop executes a Doctrine query. Batch the work or fetch the data before the loop.', $method);
@@ -72,6 +80,7 @@ final class IndirectQueryInLoopRuleTest extends RuleTestCase
         require_once __DIR__.'/fixtures/Entities.php';
         require_once __DIR__.'/fixtures/indirect.php';
         require_once __DIR__.'/fixtures/value-flow-indirect.php';
+        require_once __DIR__.'/fixtures/cached-indirect.php';
 
         return self::getContainer()->getByType(IndirectQueryInLoopRule::class);
     }

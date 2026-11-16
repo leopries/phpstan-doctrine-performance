@@ -31,7 +31,7 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
         $this->analyse([__DIR__.'/fixtures/queries.php'], [
             ['Doctrine query find()'.$single, 45],
             ['Doctrine query findOneBy()'.$single, 46],
-            ['Doctrine query findActive()'.$single, 47, DoctrineQueryInLoopRule::INDEPENDENT],
+            // findActive() is written in the project: the indirect rule follows it into its body.
             ['Doctrine query find()'.$single, 48],
             ['Doctrine query getResult()'.$single, 49],
             ['Doctrine query executeQuery()'.$single, 50, DoctrineQueryInLoopRule::INDEPENDENT],
@@ -53,6 +53,22 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
             ['Doctrine query find()'.$single, 84],
             ['Doctrine query FIND()'.$single, 85],
             ['Doctrine query flush()'.$single, 86],
+        ]);
+    }
+
+    public function testCachedQueries(): void
+    {
+        $single = ' executes inside a loop. Potential N+1 queries. Batch queries or fetch the data before the loop.';
+        // Reads served by the result cache or the second-level cache are not queries; everything in uncachedQueries() is.
+        $this->analyse([__DIR__.'/fixtures/cached-queries.php'], [
+            ['Doctrine query getResult()'.$single, 51],
+            ['Doctrine query getResult()'.$single, 52],
+            ['Doctrine query getResult()'.$single, 53],
+            ['Doctrine query getResult()'.$single, 57],
+            ['Doctrine query getResult()'.$single, 62],
+            ['Doctrine query getResult()'.$single, 66],
+            ['Doctrine query find()'.$single, 68],
+            ['Doctrine query executeQuery()'.$single, 69, DoctrineQueryInLoopRule::INDEPENDENT],
         ]);
     }
 

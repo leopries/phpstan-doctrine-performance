@@ -55,6 +55,15 @@ class Customer
     }
 }
 
+#[ORM\Entity]
+#[ORM\Cache(usage: 'READ_ONLY')]
+class Country
+{
+    #[ORM\Id]
+    #[ORM\Column]
+    public int $id;
+}
+
 #[ORM\MappedSuperclass]
 class OrderAssociations
 {

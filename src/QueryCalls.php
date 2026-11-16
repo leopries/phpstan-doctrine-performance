@@ -9,17 +9,26 @@ use Doctrine\ORM\AbstractQuery;
 use Doctrine\Persistence\ObjectManager;
 use Doctrine\Persistence\ObjectRepository;
 use PhpParser\Node\Arg;
+use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\MethodCall;
 use PHPStan\Analyser\Scope;
+use PHPStan\Reflection\ClassReflection;
+use PHPStan\Type\Doctrine\ObjectMetadataResolver;
 use PHPStan\Type\ObjectType;
 use PHPStan\Type\Type;
 
-/** Recognizes Doctrine calls that hit the database. */
+/** Recognizes Doctrine calls that hit the database; reads served by a Doctrine cache do not count. */
 final class QueryCalls
 {
     public const string READ = 'read';
     public const string WRITE = 'write';
     public const string FLUSH = 'flush';
+
+    public function __construct(
+        private readonly ObjectMetadataResolver $metadataResolver,
+        private readonly ProjectCallees $callees,
+    ) {
+    }
 
     /**
      * @return array{kind: self::READ|self::WRITE|self::FLUSH, entity: string|null}|null
@@ -35,12 +44,18 @@ final class QueryCalls
             if (!str_starts_with($method, 'find') && 'count' !== $method && 'matching' !== $method) {
                 return null;
             }
+            // A finder written in the project is followed into its body, where a result cache can be enabled.
+            if ([] !== $this->callees->resolve($call, $scope)) {
+                return null;
+            }
 
             // The template is called T or TEntityClass depending on the phpstan-doctrine version; read it by position.
             $repository = ($type->getObjectClassReflections()[0] ?? null)?->getAncestorWithClassName(ObjectRepository::class);
-            $entity = array_values($repository?->getActiveTemplateTypeMap()->getTypes() ?? [])[0] ?? null;
+            $entity = (array_values($repository?->getActiveTemplateTypeMap()->getTypes() ?? [])[0] ?? null)?->getObjectClassReflections()[0] ?? null;
+            // The second-level cache answers find(), findAll(), findBy() and findOneBy(), magic finders included.
+            $secondLevel = 'find' === $method || 'findall' === $method || str_starts_with($method, 'findby') || str_starts_with($method, 'findoneby');
 
-            return ['kind' => self::READ, 'entity' => $entity?->getObjectClassNames()[0] ?? null];
+            return $secondLevel && $this->isSecondLevelCached($entity) ? null : ['kind' => self::READ, 'entity' => $entity?->getName()];
         }
 
         if ((new ObjectType(ObjectManager::class))->isSuperTypeOf($type)->yes()) {
@@ -53,10 +68,14 @@ final class QueryCalls
 
             $argument = $call->getArgs()[0] ?? null;
             $entity = 'find' === $method && $argument instanceof Arg
-                ? ($scope->getType($argument->value)->getClassStringObjectType()->getObjectClassNames()[0] ?? null)
+                ? ($scope->getType($argument->value)->getClassStringObjectType()->getObjectClassReflections()[0] ?? null)
                 : null;
 
-            return ['kind' => self::READ, 'entity' => $entity];
+            return $this->isSecondLevelCached($entity) ? null : ['kind' => self::READ, 'entity' => $entity?->getName()];
+        }
+
+        if (true === $call->var->getAttribute(CachedQueryVisitor::ATTRIBUTE)) {
+            return null;
         }
 
         if ((new ObjectType(AbstractQuery::class))->isSuperTypeOf($type)->yes()) {
@@ -70,7 +89,12 @@ final class QueryCalls
                 return ['kind' => self::WRITE, 'entity' => null];
             }
 
-            return str_starts_with($method, 'fetch') || str_starts_with($method, 'iterate') || \in_array($method, ['executequery', 'executecachequery'], true)
+            // executeCacheQuery() and executeQuery() with a QueryCacheProfile read through the result cache.
+            if ('executecachequery' === $method || ($connection && 'executequery' === $method && self::passesProfile($call))) {
+                return null;
+            }
+
+            return str_starts_with($method, 'fetch') || str_starts_with($method, 'iterate') || 'executequery' === $method
                 ? ['kind' => self::READ, 'entity' => null] : null;
         }
 
@@ -79,5 +103,22 @@ final class QueryCalls
         }
 
         return null;
+    }
+
+    /** An entity marked #[ORM\Cache] is read from the second-level cache. */
+    private function isSecondLevelCached(?ClassReflection $entity): bool
+    {
+        return null !== $entity && null !== $this->metadataResolver->getClassMetadata($entity->getName())?->cache;
+    }
+
+    private static function passesProfile(MethodCall $call): bool
+    {
+        foreach ($call->getArgs() as $index => $argument) {
+            if (3 === $index || 'qcp' === $argument->name?->toString()) {
+                return !$argument->value instanceof ConstFetch || 'null' !== strtolower($argument->value->name->toString());
+            }
+        }
+
+        return false;
     }
 }

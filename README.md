@@ -37,16 +37,18 @@ accurate mapping information configure `phpstan-doctrine`'s
 
 ## What it reports
 
-- `doctrine.queryInLoop`: repository `find*`, `count` and `matching` calls, ORM
-  query execution, entity manager reads and flushes, and DBAL query, fetch and
-  write calls inside a loop.
+- `doctrine.queryInLoop`: Doctrine repository `find*`, `count` and `matching`
+  calls, ORM query execution, entity manager reads and flushes, and DBAL query,
+  fetch and write calls inside a loop.
 - `doctrine.queryInNestedLoop`: the same inside nested loops (N×M).
 - `doctrine.queryInBoundedLoop`: queries in `foreach` loops over an array whose
   size is statically known. Fixed cost, reported at `info` level.
 - `doctrine.indirectQueryInLoop`: a call inside a loop to a project method that
   runs a query somewhere down its call chain, for example a repository service
-  whose `save()` flushes. Calls through interfaces reach the implementations
-  found in the analysed code, up to `maxImplementations`.
+  whose `save()` flushes. Finder methods written in your own repositories
+  (`findByTeam()`) are followed into their body like any other project method.
+  Calls through interfaces reach the implementations found in the analysed
+  code, up to `maxImplementations`.
 - `doctrine.lazyAssociationInLoop`: a lazy or extra-lazy association read
   through a property or a direct getter (`return $this->property;`) inside a
   loop that changes the owner.
@@ -64,6 +66,17 @@ loops.
 
 - Files matching `testPaths`, unless `reportTests` is `true`.
 - Batch loops: `while (true)`, `for (;;)` and `foreach` over `array_chunk()`.
+- Reads served by a Doctrine cache, directly or down the call chain:
+  - ORM queries with the result cache (`enableResultCache()`,
+    `setResultCacheLifetime()`, `setResultCacheId()`, `setResultCacheProfile()`,
+    `setResultCache()`) or the second-level query cache (`setCacheable(true)` on
+    the query or its query builder), in the same method chain or on a local
+    variable before execution. `disableResultCache()` and `setCacheable(false)`
+    switch it off again.
+  - `find()`, `findAll()`, `findBy()`, `findOneBy()` (including magic finders)
+    and `EntityManager::find()` for entities mapped with `#[ORM\Cache]`.
+  - DBAL `executeCacheQuery()`, `executeQuery()` with a `QueryCacheProfile` and
+    query builders after `enableResultCache()`.
 - A query behind a boolean parameter the caller switches off, as in
   `save($entity, false)` for `if ($flush) { ... }`.
 - A lazy association whose owner does not change in the loop.
@@ -170,8 +183,9 @@ Markdown output (top 20 by default) fits a pull request comment.
 
 - One place: `// @phpstan-ignore doctrine.indirectQueryInLoop (at most 4 warehouses)`
   with the reason in parentheses.
-- A method that never queries per call, such as a cached lookup:
-  `ignoredMethods`.
+- A method that never queries per call, such as a lookup cached outside
+  Doctrine (Symfony Cache, memoization in a property): `ignoredMethods`.
+  Doctrine's own caches are recognized without configuration.
 
 PHPStan reports ignores and baseline entries that no longer match, so accepted
 findings do not outlive the code they were written for.
@@ -207,7 +221,11 @@ These are potential performance findings, not proof of SQL counts.
 - Calls on entities, vendor code and dynamic calls are not followed.
   `new Row($entity)` in a loop and first-class callables (`$mapper->map(...)`)
   are not followed for lazy associations.
-- Cached lookups and entities built in memory look like queries and proxies.
+- Caches outside Doctrine and entities built in memory look like queries and
+  proxies. Doctrine cache settings are followed through method chains and local
+  variables, not through properties or other methods; whether a cache region is
+  configured is not checked, `#[ORM\Cache]` or `setCacheable(true)` counts as
+  cached. Lazy associations to second-level cached entities are still reported.
 - Fetch joins are recognized in query builder chains, not in DQL strings.
 - The association rules read getter and repository bodies of other files, which
   PHPStan's result cache does not track. After changing a fetch join, run
