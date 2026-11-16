@@ -8,7 +8,8 @@ use PHPStan\Command\AnalysisResult;
  * The Doctrine findings of one run grouped by cause, worst first; shared by the report formatters.
  *
  * Error formatters cannot receive command line options, so the filter comes from the environment:
- * DOCTRINE_REPORT_MIN_LEVEL=high hides causes below that level, DOCTRINE_REPORT_TOP=20 keeps the worst 20.
+ * DOCTRINE_REPORT_IDENTIFIER=lazyAssociationInLoop keeps only the findings with that identifier (several separated
+ * by commas), DOCTRINE_REPORT_MIN_LEVEL=high hides causes below that level, DOCTRINE_REPORT_TOP=20 keeps the worst 20.
  *
  * @internal
  *
@@ -19,11 +20,19 @@ final readonly class CauseReport
 {
     public const string ENV_MIN_LEVEL = 'DOCTRINE_REPORT_MIN_LEVEL';
     public const string ENV_TOP = 'DOCTRINE_REPORT_TOP';
+    public const string ENV_IDENTIFIER = 'DOCTRINE_REPORT_IDENTIFIER';
+    /** Every identifier the rules report. */
+    public const array IDENTIFIERS = [
+        'doctrine.queryInLoop', 'doctrine.queryInNestedLoop', 'doctrine.queryInBoundedLoop', 'doctrine.indirectQueryInLoop',
+        'doctrine.lazyAssociationInLoop', 'doctrine.indirectLazyAssociationInLoop',
+    ];
 
     /**
-     * @param list<Cause>        $causes   the causes left by the filter
-     * @param array<string, int> $levels   number of causes per level, before the filter
-     * @param list<string>       $warnings invalid filter values; they are ignored rather than hiding everything
+     * @param list<Cause>       $causes      the causes left by the filter
+     * @param array<string, int> $levels      number of causes per level, before the level and top filters
+     * @param list<string>       $warnings    invalid filter values; they are ignored rather than hiding everything
+     * @param list<string>|null  $identifiers the identifiers the findings were restricted to; totals count only those
+     * @param int                $excluded    findings left out because of their identifier
      */
     private function __construct(
         public array $causes,
@@ -33,6 +42,8 @@ final readonly class CauseReport
         public ?string $minLevel,
         public ?int $top,
         public array $warnings,
+        public ?array $identifiers = null,
+        public int $excluded = 0,
     ) {
     }
 
@@ -42,12 +53,20 @@ final readonly class CauseReport
         $cwd = getcwd();
         $relative = static fn (string $path): string => false !== $cwd && str_starts_with($path, $cwd.'/') ? substr($path, \strlen($cwd) + 1) : $path;
 
+        $warnings = [];
+        $identifiers = self::identifiers($warnings);
+        $excluded = 0;
         $causes = [];
         foreach ($analysisResult->getFileSpecificErrors() as $error) {
             $metadata = $error->getMetadata();
             $score = $metadata[Severity::METADATA_SCORE] ?? null;
             $cause = $metadata[Severity::METADATA_CAUSE] ?? null;
             if (!\is_int($score) || !\is_string($cause)) {
+                continue;
+            }
+            // Filtered per finding, not per cause: a cause reached directly and through calls shows only the asked-for loops.
+            if (null !== $identifiers && !\in_array($error->getIdentifier(), $identifiers, true)) {
+                ++$excluded;
                 continue;
             }
 
@@ -77,7 +96,6 @@ final readonly class CauseReport
             $totalLoops += \count($group['locations']);
         }
 
-        $warnings = [];
         $minLevel = self::minLevel($warnings);
         $top = self::top($warnings) ?? $defaultTop;
         $shown = $causes;
@@ -88,7 +106,7 @@ final readonly class CauseReport
             $shown = \array_slice($shown, 0, $top);
         }
 
-        return new self($shown, $levels, \count($causes), $totalLoops, $minLevel, null !== $top && $top > 0 ? $top : null, $warnings);
+        return new self($shown, $levels, \count($causes), $totalLoops, $minLevel, null !== $top && $top > 0 ? $top : null, $warnings, $identifiers, $excluded);
     }
 
     public function hidden(): int
@@ -103,6 +121,9 @@ final readonly class CauseReport
             '%d %s in %d %s: %s', $this->totalCauses, 1 === $this->totalCauses ? 'cause' : 'causes', $this->totalLoops, 1 === $this->totalLoops ? 'loop' : 'loops',
             implode(', ', array_map(static fn (string $level, int $count): string => $count.' '.$level, array_keys($this->levels), $this->levels)),
         );
+        if (null !== $this->identifiers) {
+            $summary .= \sprintf(' (only %s; %d other %s left out)', implode(', ', $this->identifiers), $this->excluded, 1 === $this->excluded ? 'finding' : 'findings');
+        }
         if (0 === $this->hidden()) {
             return $summary;
         }
@@ -116,6 +137,43 @@ final readonly class CauseReport
     public static function shorten(string $cause): string
     {
         return (string) preg_replace('#(?:[\w]+\\\)+#', '', $cause);
+    }
+
+    /**
+     * The identifiers to keep, with or without the `doctrine.` prefix and in any case. One unknown identifier ignores
+     * the whole filter: a typo must not make the report look clean.
+     *
+     * @param list<string> $warnings
+     *
+     * @return list<string>|null
+     */
+    private static function identifiers(array &$warnings): ?array
+    {
+        $value = trim((string) getenv(self::ENV_IDENTIFIER));
+        if ('' === $value) {
+            return null;
+        }
+
+        $known = [];
+        foreach (self::IDENTIFIERS as $identifier) {
+            $known[strtolower($identifier)] = $identifier;
+            $known[strtolower(substr($identifier, \strlen('doctrine.')))] = $identifier;
+        }
+        $identifiers = [];
+        foreach (explode(',', $value) as $part) {
+            $part = strtolower(trim($part));
+            if ('' === $part) {
+                continue;
+            }
+            if (!isset($known[$part])) {
+                $warnings[] = \sprintf('Ignoring %s="%s": expected one or more of %s, separated by commas.', self::ENV_IDENTIFIER, $value, implode(', ', self::IDENTIFIERS));
+
+                return null;
+            }
+            $identifiers[$known[$part]] = $known[$part];
+        }
+
+        return [] === $identifiers ? null : array_values($identifiers);
     }
 
     /** @param list<string> $warnings */

@@ -157,17 +157,27 @@ vendor/bin/phpstan analyse --error-format=doctrinePerformanceMarkdown
 ```
 
 The report formats show only Doctrine findings and always exit with 0: they are
-a report, the regular run is the gate. Two environment variables shorten them
+a report, the regular run is the gate. Environment variables narrow them
 (PHPStan error formatters cannot take command line options):
 
 | Variable | Effect |
 | --- | --- |
+| `DOCTRINE_REPORT_IDENTIFIER` | only findings with the given identifier; several separated by commas, the `doctrine.` prefix is optional |
 | `DOCTRINE_REPORT_MIN_LEVEL` | only causes at or above the given level |
 | `DOCTRINE_REPORT_TOP` | only the worst N causes; `0` means no limit |
 
-The last line always states the full totals and how many causes are hidden. An
-invalid value is ignored with a warning, so a typo never makes the report look
-clean. The JSON output has a stable order, so two reports can be diffed; the
+```sh
+DOCTRINE_REPORT_IDENTIFIER=indirectLazyAssociationInLoop vendor/bin/phpstan analyse --error-format=doctrinePerformance
+```
+
+The identifier filter works per finding: a cause that is reached both directly
+and through calls shows only the loops with the requested identifier, and the
+totals count only those. The level and top filters then apply to what is left.
+The last line always states the totals, how many findings the identifier filter
+left out and how many causes are hidden. An invalid value is ignored with a
+warning, so a typo never makes the report look clean. The filter only affects
+the report formats; the regular output and `doctrineBaseline` always cover every
+finding. The JSON output has a stable order, so two reports can be diffed; the
 Markdown output (top 20 by default) fits a pull request comment.
 
 ## Accepting all current findings

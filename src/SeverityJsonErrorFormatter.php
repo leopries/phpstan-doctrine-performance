@@ -17,7 +17,8 @@ final class SeverityJsonErrorFormatter implements ErrorFormatter
         $report = CauseReport::fromAnalysisResult($analysisResult);
         $output->writeRaw(json_encode([
             'totals' => ['causes' => $report->totalCauses, 'loops' => $report->totalLoops, 'levels' => $report->levels],
-            'filter' => ['minLevel' => $report->minLevel, 'top' => $report->top],
+            'filter' => ['identifiers' => $report->identifiers, 'minLevel' => $report->minLevel, 'top' => $report->top],
+            'excluded' => $report->excluded,
             'shown' => \count($report->causes),
             'hidden' => $report->hidden(),
             'warnings' => $report->warnings,

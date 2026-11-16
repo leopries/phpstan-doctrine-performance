@@ -24,6 +24,7 @@ final class SeverityErrorFormatterTest extends ErrorFormatterTestCase
     {
         putenv(CauseReport::ENV_MIN_LEVEL);
         putenv(CauseReport::ENV_TOP);
+        putenv(CauseReport::ENV_IDENTIFIER);
         parent::tearDown();
     }
 
@@ -93,6 +94,45 @@ final class SeverityErrorFormatterTest extends ErrorFormatterTestCase
         self::assertSame([3, null, []], [\count($report->causes), $report->top, $report->warnings]);
     }
 
+    public function testIdentifierFilter(): void
+    {
+        // With or without the prefix, in any case, several separated by commas.
+        putenv(CauseReport::ENV_IDENTIFIER.'= LazyAssociationInLoop , doctrine.queryInNestedLoop,');
+        $report = CauseReport::fromAnalysisResult(self::findings());
+
+        // SAVE keeps only its nested loop: the indirect findings of the same cause are left out.
+        self::assertSame([self::SAVE, self::LAZY], array_column($report->causes, 'cause'));
+        self::assertSame(['doctrine.queryInNestedLoop'], $report->causes[0]['identifiers']);
+        self::assertSame([['file' => 'src/Service/B.php', 'line' => 7, 'score' => 85]], $report->causes[0]['locations']);
+        self::assertSame([['doctrine.lazyAssociationInLoop', 'doctrine.queryInNestedLoop'], 3, 2, 3, []], [$report->identifiers, $report->excluded, $report->totalCauses, $report->totalLoops, $report->warnings]);
+        self::assertSame('2 causes in 3 loops: 1 critical, 0 high, 1 medium, 0 low, 0 info (only doctrine.lazyAssociationInLoop, doctrine.queryInNestedLoop; 3 other findings left out)', $report->summary());
+
+        // The other filters apply to what is left.
+        putenv(CauseReport::ENV_TOP.'=1');
+        self::assertStringEndsWith('3 other findings left out); showing 1, 1 hidden (DOCTRINE_REPORT_TOP=1)', CauseReport::fromAnalysisResult(self::findings())->summary());
+        putenv(CauseReport::ENV_TOP);
+
+        putenv(CauseReport::ENV_IDENTIFIER.'=indirectLazyAssociationInLoop');
+        $markdown = $this->format(new SeverityMarkdownErrorFormatter());
+        self::assertStringContainsString("**0 causes** in 0 loops.\n\nOnly `doctrine.indirectLazyAssociationInLoop`; 6 other findings left out.\n", $markdown);
+        self::assertStringNotContainsString('Accept them', $markdown);
+    }
+
+    public function testKnowsEveryIdentifierTheRulesReport(): void
+    {
+        $reported = [];
+        foreach (glob(\dirname(__DIR__).'/src/*.php') ?: [] as $file) {
+            preg_match_all("#'(doctrine\\.[a-zA-Z]+)'#", (string) file_get_contents($file), $matches);
+            array_push($reported, ...$matches[1]);
+        }
+        $reported = array_values(array_unique($reported));
+        sort($reported);
+        $known = CauseReport::IDENTIFIERS;
+        sort($known);
+
+        self::assertSame($known, $reported);
+    }
+
     #[DataProvider('provideInvalidValuesAreIgnoredWithAWarningCases')]
     public function testInvalidValuesAreIgnoredWithAWarning(string $name, string $value): void
     {
@@ -116,6 +156,8 @@ final class SeverityErrorFormatterTest extends ErrorFormatterTestCase
         yield 'negative' => [CauseReport::ENV_TOP, '-5'];
         yield 'fraction' => [CauseReport::ENV_TOP, '2.5'];
         yield 'overflow' => [CauseReport::ENV_TOP, '99999999999999999999'];
+        yield 'unknown identifier' => [CauseReport::ENV_IDENTIFIER, 'lazyAssociationInLoop,queryInLop'];
+        yield 'identifier of another extension' => [CauseReport::ENV_IDENTIFIER, 'argument.type'];
     }
 
     public function testJson(): void
@@ -125,7 +167,8 @@ final class SeverityErrorFormatterTest extends ErrorFormatterTestCase
 
         self::assertSame([
             'totals' => ['causes' => 3, 'loops' => 6, 'levels' => ['critical' => 1, 'high' => 0, 'medium' => 2, 'low' => 0, 'info' => 0]],
-            'filter' => ['minLevel' => null, 'top' => 1],
+            'filter' => ['identifiers' => null, 'minLevel' => null, 'top' => 1],
+            'excluded' => 0,
             'shown' => 1,
             'hidden' => 2,
             'warnings' => [],

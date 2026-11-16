@@ -19,6 +19,9 @@ final class SeverityMarkdownErrorFormatter implements ErrorFormatter
     {
         $report = CauseReport::fromAnalysisResult($analysisResult, self::TOP);
         $lines = ['## Doctrine N+1 report', '', \sprintf('**%d causes** in %d loops.', $report->totalCauses, $report->totalLoops), ''];
+        if (null !== $report->identifiers) {
+            array_splice($lines, 3, 0, ['', \sprintf('Only %s; %d other findings left out.', implode(', ', array_map(self::code(...), $report->identifiers)), $report->excluded)]);
+        }
         $lines[] = '| '.implode(' | ', array_map(ucfirst(...), array_keys($report->levels))).' |';
         $lines[] = '|'.str_repeat(' ---: |', \count($report->levels));
         $lines[] = '| '.implode(' | ', $report->levels).' |';
