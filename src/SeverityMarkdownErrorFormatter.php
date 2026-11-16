@@ -42,6 +42,9 @@ final class SeverityMarkdownErrorFormatter implements ErrorFormatter
                 implode(', ', array_filter([null === $report->minLevel ? null : 'level '.$report->minLevel.' and above', null === $report->top ? null : 'top '.$report->top])),
             ));
         }
+        if ($report->totalCauses > 0) {
+            array_push($lines, '', 'Accept them with `'.BaselineErrorFormatter::COMMAND.'`.');
+        }
         $output->writeRaw(implode("\n", $lines)."\n");
 
         // A report, not a gate: the regular run with its baseline decides whether the build fails.

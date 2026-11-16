@@ -4,5 +4,6 @@ includes:
 parameters:
     doctrinePerformance:
         testPaths!: []
+        baselineTip: false
         ignoredMethods:
             - Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\IndirectLazy\OrderMapper::cached

@@ -120,6 +120,7 @@ parameters:
     doctrinePerformance:
         minimumSeverity: info      # info, low, medium, high or critical
         severityTip: true
+        baselineTip: true          # name the accept command in every tip
         tableStatsFile: null       # see "Table statistics"
         smallTableRows: 200
         largeTableRows: 100000
@@ -160,10 +161,34 @@ invalid value is ignored with a warning, so a typo never makes the report look
 clean. The JSON output has a stable order, so two reports can be diffed; the
 Markdown output (top 20 by default) fits a pull request comment.
 
+## Accepting all current findings
+
+To accept the current findings, so only new ones fail the build:
+
+```sh
+vendor/bin/phpstan analyse --error-format=doctrineBaseline
+```
+
+It writes only the Doctrine findings to `phpstan-doctrine-baseline.php`, apart
+from your regular PHPStan baseline, and tells you to include the file once:
+
+```neon
+includes:
+    - phpstan-doctrine-baseline.php
+```
+
+Run the same command again after new findings appear: once the file is
+included, the accepted findings no longer show up, so it adds only the new ones.
+While the file is not included, it is written from scratch, so counts never
+double. Pass your usual `-c` and paths; `DOCTRINE_BASELINE_FILE=path` picks
+another file. The tip of every finding and the reports name the command;
+`baselineTip: false` removes it from the tips.
+
 ## Introducing it to an existing project
 
-1. Generate a baseline, so only new findings fail the build:
-   `vendor/bin/phpstan analyse --generate-baseline`.
+1. Accept the existing findings, so only new findings fail the build:
+   `vendor/bin/phpstan analyse --error-format=doctrineBaseline` (see above).
+   `--generate-baseline` works too, but also baselines every other PHPStan error.
 2. The message of a finding names only the call and the loop. The call chain and
    the score are in the tip, which a baseline does not match, so refactoring
    further down the chain leaves the baseline intact.
@@ -181,6 +206,8 @@ Markdown output (top 20 by default) fits a pull request comment.
 
 ## Accepting a finding
 
+- All current findings: `vendor/bin/phpstan analyse --error-format=doctrineBaseline`,
+  see [Accepting all current findings](#accepting-all-current-findings).
 - One place: `// @phpstan-ignore doctrine.indirectQueryInLoop (at most 4 warehouses)`
   with the reason in parentheses.
 - A method that never queries per call, such as a lookup cached outside

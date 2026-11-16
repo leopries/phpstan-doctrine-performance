@@ -57,7 +57,7 @@ final class SeverityErrorFormatterTest extends ErrorFormatterTestCase
         $text = $this->format(new SeverityErrorFormatter());
 
         self::assertStringContainsString(" 85 critical InvoiceRepository::save → flush()\n             3 loops, query at src/Repository/InvoiceRepository.php:40\n             85 = 60 flush + 25 nested loops\n              85 src/Service/B.php:7\n", $text);
-        self::assertStringEndsWith("\n\n3 causes in 6 loops: 1 critical, 0 high, 2 medium, 0 low, 0 info\n", $text);
+        self::assertStringEndsWith("\n\nAccept them: vendor/bin/phpstan analyse --error-format=doctrineBaseline\n3 causes in 6 loops: 1 critical, 0 high, 2 medium, 0 low, 0 info\n", $text);
     }
 
     public function testLevelFilter(): void
@@ -175,6 +175,8 @@ final class SeverityErrorFormatterTest extends ErrorFormatterTestCase
             | 50 | medium | `Invoice::$tags` | 2 | `src/Service/A.php:20` |
 
             2 of 3 causes shown, 1 hidden (top 2). `composer lint:doctrine` lists all of them.
+
+            Accept them with `vendor/bin/phpstan analyse --error-format=doctrineBaseline`.
 
             MARKDOWN, $this->format(new SeverityMarkdownErrorFormatter()));
     }

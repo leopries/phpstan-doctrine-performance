@@ -55,6 +55,7 @@ final class Severity
         private readonly array $hotPaths,
         private readonly array $testPaths,
         private readonly bool $reportTests,
+        private readonly bool $baselineTip = true,
     ) {
         if (!isset(self::LEVELS[$minimumSeverity])) {
             throw new \InvalidArgumentException(\sprintf('doctrinePerformance.minimumSeverity must be one of %s, got "%s".', implode(', ', array_keys(self::LEVELS)), $minimumSeverity));
@@ -140,6 +141,9 @@ final class Severity
         $tips = null === $detail ? [] : [$detail];
         if ($this->severityTip) {
             $tips[] = \sprintf('Severity %s (%d/100) = %s.', $assessment['level'], $assessment['score'], $breakdown);
+        }
+        if ($this->baselineTip) {
+            $tips[] = 'Accept the findings with '.BaselineErrorFormatter::COMMAND.'.';
         }
         if ([] !== $tips) {
             $builder->tip(implode(' ', $tips));

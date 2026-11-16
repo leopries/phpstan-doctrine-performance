@@ -4,5 +4,6 @@ includes:
 parameters:
     doctrinePerformance:
         testPaths!: []
+        baselineTip: false
         ignoredMethods:
             - Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\Indirect\CustomerLookup::cached

@@ -36,6 +36,9 @@ final class SeverityErrorFormatter implements ErrorFormatter
         }
 
         $output->writeLineFormatted('');
+        if ($report->totalCauses > 0) {
+            $output->writeLineFormatted('Accept them: '.BaselineErrorFormatter::COMMAND);
+        }
         foreach ($report->warnings as $warning) {
             $output->writeLineFormatted($warning);
         }

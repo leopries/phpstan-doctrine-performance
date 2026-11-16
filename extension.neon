@@ -2,6 +2,7 @@ parametersSchema:
     doctrinePerformance: structure([
         minimumSeverity: string()
         severityTip: bool()
+        baselineTip: bool()
         tableStatsFile: schema(string(), nullable())
         smallTableRows: int()
         largeTableRows: int()
@@ -17,6 +18,8 @@ parameters:
         # Findings below this level are not reported: info, low, medium, high or critical.
         minimumSeverity: info
         severityTip: true
+        # Names the command that accepts the findings in every tip.
+        baselineTip: true
         # JSON written by bin/doctrine-table-stats; row counts refine the severity.
         tableStatsFile: null
         smallTableRows: 200
@@ -55,6 +58,7 @@ services:
         arguments:
             minimumSeverity: %doctrinePerformance.minimumSeverity%
             severityTip: %doctrinePerformance.severityTip%
+            baselineTip: %doctrinePerformance.baselineTip%
             tableStatsFile: %doctrinePerformance.tableStatsFile%
             smallTableRows: %doctrinePerformance.smallTableRows%
             largeTableRows: %doctrinePerformance.largeTableRows%
@@ -101,3 +105,7 @@ services:
         class: Leopries\PHPStanDoctrinePerformance\SeverityJsonErrorFormatter
     errorFormatter.doctrinePerformanceMarkdown:
         class: Leopries\PHPStanDoctrinePerformance\SeverityMarkdownErrorFormatter
+    errorFormatter.doctrineBaseline:
+        class: Leopries\PHPStanDoctrinePerformance\BaselineErrorFormatter
+        arguments:
+            ignoreErrors: %ignoreErrors%
