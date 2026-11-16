@@ -113,3 +113,60 @@ class Order extends OrderAssociations
         return 'order';
     }
 }
+
+enum MembershipState: string
+{
+    case Active = 'active';
+    case Invited = 'invited';
+    case Left = 'left';
+    case Declined = 'declined';
+}
+
+#[ORM\Entity]
+class Membership
+{
+    #[ORM\Id]
+    #[ORM\Column]
+    public int $id;
+
+    #[ORM\Column]
+    public MembershipState $state = MembershipState::Active;
+
+    #[ORM\Column]
+    public ?\DateTimeImmutable $invitedAt = null;
+
+    #[ORM\ManyToOne(targetEntity: Region::class)]
+    private Region $community;
+
+    #[ORM\ManyToOne(targetEntity: Customer::class)]
+    private Customer $user;
+
+    public function getMembershipState(): MembershipState
+    {
+        return $this->state;
+    }
+
+    public function setMembershipState(MembershipState $state): static
+    {
+        $this->state = $state;
+
+        return $this;
+    }
+
+    public function setInvitedAt(\DateTimeImmutable $invitedAt): static
+    {
+        $this->invitedAt = $invitedAt;
+
+        return $this;
+    }
+
+    public function getCommunity(): Region
+    {
+        return $this->community;
+    }
+
+    public function getUser(): Customer
+    {
+        return $this->user;
+    }
+}

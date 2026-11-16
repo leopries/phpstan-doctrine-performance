@@ -21,7 +21,7 @@ use PHPStan\Type\TypeCombinator;
  * Records calls to project methods that hand an entity on: a parameter of the calling method (the callee's loads
  * become the caller's), or an entity that changes with an enclosing loop (the call site of a potential finding).
  *
- * @phpstan-type Argument array{depth: int, fetched: list<string>, param: int|null, variable: string|null, iteration: string|null, path: string}
+ * @phpstan-type Argument array{depth: int, fetched: list<string>, param: int|null, variable: string|null, iteration: string|null, path: string, states: array<string, string>}
  * @phpstan-type Call array{caller: string|null, line: int, loops: list<int>, callees: list<string>, conditional: bool, args: array<int, Argument>}
  *
  * @implements Collector<CallLike, Call>
@@ -84,6 +84,8 @@ final class EntityArgumentCollector implements Collector
                     'fetched' => $depth > 0 ? array_values(array_unique([...$this->fetched($argument->value, $type, $scope), ...$this->associations->assignedProperties($argument->value, $node, $scope)])) : [],
                     'param' => $param, 'variable' => $root[0] ?? null,
                     'iteration' => null === $root ? null : LoopDepthVisitor::iterationKey($node, $root[0]), 'path' => $root[1] ?? '',
+                    // The state the calling method set, which may rule out the callee's guarded reads.
+                    'states' => $this->associations->states($argument->value, $node, $scope),
                 ];
             }
         }

@@ -17,7 +17,9 @@ use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\AssignOp;
 use PhpParser\Node\Expr\AssignRef;
 use PhpParser\Node\Expr\BinaryOp;
+use PhpParser\Node\Expr\BinaryOp\Equal;
 use PhpParser\Node\Expr\BinaryOp\Identical;
+use PhpParser\Node\Expr\BinaryOp\NotEqual;
 use PhpParser\Node\Expr\BinaryOp\NotIdentical;
 use PhpParser\Node\Expr\BooleanNot;
 use PhpParser\Node\Expr\CallLike;
@@ -28,6 +30,7 @@ use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\Instanceof_;
 use PhpParser\Node\Expr\List_;
+use PhpParser\Node\Expr\Match_;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Expr\NullsafeMethodCall;
@@ -48,6 +51,8 @@ use PhpParser\Node\InterpolatedStringPart;
 use PhpParser\Node\Name;
 use PhpParser\Node\Param;
 use PhpParser\Node\Scalar;
+use PhpParser\Node\Scalar\Int_;
+use PhpParser\Node\Scalar\String_;
 use PhpParser\Node\Stmt\Catch_;
 use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Continue_;
@@ -67,11 +72,21 @@ use PHPStan\Type\ObjectType;
 use PHPStan\Type\UnionType;
 
 /**
- * Assignment: receiver path, `*` for a new object or `property:name`/`method:name`, loop depth of the statement, and
- * depth of the innermost loop that changes the assigned value (-1: never a lazy proxy).
+ * Assignment: receiver path, `*` for a new object or `property:name`/`method:name`, loop depth of the statement,
+ * depth of the innermost loop that changes the assigned value (-1: never a lazy proxy), the assigned constant (see
+ * constant()) and the calls before it in a fluent chain, which have to return `$this`.
  *
- * @phpstan-type Assignment array{string, string, int, int}
- * @phpstan-type Context array{guards: list<array{string, bool}>, conditional: bool, condition: bool, parameters: array<string, true>, chunks: array<string, true>, assigned: list<Assignment>}
+ * Condition: a node only runs when the value behind a receiver path and member (`method:getState`, `property:state`)
+ * is (true) or is not (false) one of the given constants. The last field says whether nothing in the function wrote to
+ * the object before: only then does the state a caller set still hold there.
+ *
+ * Decision: the receiver path and member a `match` decides on, the constants it maps to true and to false, and its
+ * default arm (null without one).
+ *
+ * @phpstan-type Assignment array{string, string, int, int, string|null, list<string>}
+ * @phpstan-type Condition array{string, string, bool, list<string>, bool}
+ * @phpstan-type Decision array{string, string, list<string>, list<string>, bool|null}
+ * @phpstan-type Context array{guards: list<array{string, bool}>, conditional: bool, condition: bool, parameters: array<string, true>, chunks: array<string, true>, assigned: list<Assignment>, conditions: list<Condition>, decisions: array<string, Decision>, written: array<string, true>}
  */
 final class LoopDepthVisitor extends NodeVisitorAbstract
 {
@@ -84,8 +99,9 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
     public const string CONDITION_ATTRIBUTE = 'doctrinePerformanceLoopCondition';
     public const string LOOP_ITERATES_ATTRIBUTE = 'doctrinePerformanceLoopIterates';
     public const string ASSIGNED_ATTRIBUTE = 'doctrinePerformanceAssigned';
+    public const string CONDITIONS_ATTRIBUTE = 'doctrinePerformanceConditions';
     private const string GROUP_ATTRIBUTE = 'doctrinePerformanceLoopGroup';
-    private const array CONTEXT = ['guards' => [], 'conditional' => false, 'condition' => false, 'parameters' => [], 'chunks' => [], 'assigned' => []];
+    private const array CONTEXT = ['guards' => [], 'conditional' => false, 'condition' => false, 'parameters' => [], 'chunks' => [], 'assigned' => [], 'conditions' => [], 'decisions' => [], 'written' => []];
     private const string ITERATES_ATTRIBUTE = 'doctrinePerformanceIterates';
     private const array ITERATING_FUNCTIONS = ['array_map', 'array_filter', 'array_walk', 'array_reduce', 'array_find', 'array_find_key', 'array_any', 'array_all', 'usort', 'uasort', 'uksort', 'iterator_apply'];
     private const array ITERATING_METHODS = ['map', 'filter', 'forall', 'exists', 'findfirst', 'reduce', 'partition', 'each'];
@@ -340,6 +356,7 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
             $node->setAttribute(self::CONDITION_ATTRIBUTE, $context['condition']);
             $node->setAttribute(self::LOOP_ITERATES_ATTRIBUTE, $iterates);
             $node->setAttribute(self::ASSIGNED_ATTRIBUTE, $context['assigned']);
+            $node->setAttribute(self::CONDITIONS_ATTRIBUTE, $context['conditions']);
             $use = $this->describeUse($node, $parent);
             if ($parent instanceof Assign && $parent->expr === $node && $parent->var instanceof Variable && \is_string($parent->var->name)) {
                 $node->setAttribute(self::USES_ATTRIBUTE, $variableUses[$parent->var->name] ?? ['reference']);
@@ -353,6 +370,10 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
             || ($node instanceof For_ && [] === $node->cond)
             || ($node instanceof Foreach_ && $this->isChunking($node->expr, $context['chunks']));
         $guard = $node instanceof If_ && [] === $node->elseifs ? $this->parameterGuard($node->cond, $context['parameters']) : null;
+        $condition = $node instanceof If_ && [] === $node->elseifs ? self::condition($node->cond, $context['decisions']) : null;
+        if (null !== $condition) {
+            $condition[4] = !isset($context['written'][explode('.', $condition[0])[0]]);
+        }
         $isLoop = !$batchLoop && ($node instanceof Foreach_ || $node instanceof For_ || $node instanceof While_ || $node instanceof Do_);
         $changing = $isLoop ? $this->changingVariables($node) : [];
 
@@ -379,6 +400,9 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
             } elseif (($node instanceof If_ && 'cond' !== $name) || ($node instanceof Ternary && 'cond' !== $name) || ($node instanceof TryCatch && 'catches' === $name)) {
                 $childContext['conditional'] = true;
             }
+            if (null !== $condition && \in_array($name, ['stmts', 'else'], true)) {
+                $childContext['conditions'][] = 'stmts' === $name ? $condition : self::negate($condition);
+            }
 
             $children = $node->{$name}; // @phpstan-ignore property.dynamicName (Traverse PHP-Parser's declared subnodes.)
             foreach (\is_array($children) ? $children : [$children] as $child) {
@@ -387,12 +411,23 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
                 }
                 $this->annotate($child, $childDepth, $node, $variableUses, $childLoops, $childVariables, $childContext, $childIterates);
                 $childContext['assigned'] = $this->assignments($child, $childDepth, $childVariables, $childContext['assigned']);
+                [$childContext['conditions'], $childContext['decisions']] = $this->conditions($child, $childContext['conditions'], $childContext['decisions']);
+                $childContext['written'] += $this->writtenVariables($child);
 
                 // After `if (!$flush) { return; }` the rest of the block only runs when $flush is true.
-                $exit = $child instanceof If_ && [] === $child->elseifs && null === $child->else ? $this->parameterGuard($child->cond, $context['parameters']) : null;
                 $last = $child instanceof If_ && [] !== $child->stmts ? $child->stmts[\count($child->stmts) - 1] : null;
-                if (null !== $exit && ($last instanceof Return_ || $last instanceof Continue_ || ($last instanceof Expression && $last->expr instanceof Throw_))) {
-                    $childContext['guards'][] = [$exit[0], !$exit[1]];
+                if ($child instanceof If_ && [] === $child->elseifs && null === $child->else
+                    && ($last instanceof Return_ || $last instanceof Continue_ || ($last instanceof Expression && $last->expr instanceof Throw_))) {
+                    $exit = $this->parameterGuard($child->cond, $context['parameters']);
+                    if (null !== $exit) {
+                        $childContext['guards'][] = [$exit[0], !$exit[1]];
+                    }
+                    // After `if (!$shouldPersist) { return; }` with `$shouldPersist = match ($membership->getState()) {…}`.
+                    $exit = self::condition($child->cond, $childContext['decisions']);
+                    if (null !== $exit) {
+                        $exit[4] = !isset($childContext['written'][explode('.', $exit[0])[0]]);
+                        $childContext['conditions'][] = self::negate($exit);
+                    }
                 }
             }
         }
@@ -410,8 +445,11 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
     private function assignments(Node $statement, int $depth, array $loopVariables, array $assigned): array
     {
         if ([] !== $assigned) {
+            // A reassigned variable is another object; a member written anywhere in the statement, also behind a condition,
+            // may hold something else now. The unconditional writes are added again below.
             $reassigned = $this->reassignedVariables($statement);
-            $assigned = array_values(array_filter($assigned, static fn (array $assignment): bool => !isset($reassigned[explode('.', $assignment[0])[0]])));
+            $written = self::writtenMembers($statement);
+            $assigned = array_values(array_filter($assigned, static fn (array $assignment): bool => !isset($reassigned[explode('.', $assignment[0])[0]]) && !isset($written[$assignment[0].'|'.$assignment[1]])));
         }
         if (!$statement instanceof Expression) {
             return $assigned;
@@ -419,16 +457,217 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
 
         $expr = $statement->expr;
         if ($expr instanceof Assign && $expr->var instanceof Variable && \is_string($expr->var->name) && $expr->expr instanceof New_) {
-            $assigned[] = [$expr->var->name, '*', $depth, -1];
+            $assigned[] = [$expr->var->name, '*', $depth, -1, null, []];
         } elseif ($expr instanceof Assign && ($expr->var instanceof PropertyFetch || $expr->var instanceof NullsafePropertyFetch) && $expr->var->name instanceof Identifier
             && null !== ($path = self::receiverPath($expr->var->var))) {
-            $assigned[] = [$path, 'property:'.$expr->var->name->toString(), $depth, self::valueDepth($expr->expr, $depth, $loopVariables, $assigned)];
-        } elseif (($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall) && $expr->name instanceof Identifier && !$expr->isFirstClassCallable()
-            && [] !== $expr->getArgs() && null !== ($path = self::receiverPath($expr->var))) {
-            $assigned[] = [$path, 'method:'.$expr->name->toString(), $depth, max(-1, ...array_map(static fn (Expr $value): int => self::valueDepth($value, $depth, $loopVariables, $assigned), self::argumentValues($expr)))];
+            $assigned[] = [$path, 'property:'.$expr->var->name->toString(), $depth, self::valueDepth($expr->expr, $depth, $loopVariables, $assigned), self::constant($expr->expr), []];
+        } else {
+            // `$membership->setState(MembershipState::Invited)->setInvitedAt($now)`: each call of a fluent chain.
+            $chain = [];
+            while (($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall) && $expr->name instanceof Identifier && !$expr->isFirstClassCallable() && [] !== $expr->getArgs()) {
+                array_unshift($chain, [$expr->name->toString(), self::argumentValues($expr)]);
+                $expr = $expr->var;
+            }
+            $path = [] === $chain ? null : self::receiverPath($expr);
+            if (null !== $path) {
+                $via = [];
+                foreach ($chain as [$name, $values]) {
+                    $assigned[] = [$path, 'method:'.$name, $depth, max(-1, ...array_map(static fn (Expr $value): int => self::valueDepth($value, $depth, $loopVariables, $assigned), $values)),
+                        1 === \count($values) ? self::constant($values[0]) : null, $via];
+                    $via[] = $name;
+                }
+            }
         }
 
         return $assigned;
+    }
+
+    /**
+     * The conditions and the decisions still known after a statement. Writing a member of the object a condition is
+     * about, or reassigning its variable, may change the value it tested; `$keep = match (…) {…}` adds a decision.
+     *
+     * @param list<Condition>         $conditions
+     * @param array<string, Decision> $decisions
+     *
+     * @return array{list<Condition>, array<string, Decision>}
+     */
+    private function conditions(Node $statement, array $conditions, array $decisions): array
+    {
+        if ([] !== $conditions || [] !== $decisions) {
+            $reassigned = $this->reassignedVariables($statement);
+            $written = [];
+            foreach (array_keys(self::writtenMembers($statement)) as $member) {
+                $written[explode('|', $member)[0]] = true;
+            }
+            $changed = static fn (string $path): bool => isset($reassigned[explode('.', $path)[0]]) || isset($written[$path]);
+            $conditions = array_values(array_filter($conditions, static fn (array $condition): bool => !$changed($condition[0])));
+            $decisions = array_filter($decisions, static fn (array $decision, string $variable): bool => !isset($reassigned[$variable]) && !$changed($decision[0]), \ARRAY_FILTER_USE_BOTH);
+        }
+
+        if ($statement instanceof Expression && $statement->expr instanceof Assign && $statement->expr->var instanceof Variable && \is_string($statement->expr->var->name)
+            && $statement->expr->expr instanceof Match_ && null !== ($decision = self::decision($statement->expr->expr))) {
+            $decisions[$statement->expr->var->name] = $decision;
+        }
+
+        return [$conditions, $decisions];
+    }
+
+    /**
+     * The variables whose objects a statement may change: reassigned ones and those it writes a member of or calls a
+     * method with arguments on, which may be a setter.
+     *
+     * @return array<string, true>
+     */
+    private function writtenVariables(Node $statement): array
+    {
+        $written = $this->reassignedVariables($statement);
+        foreach (array_keys(self::writtenMembers($statement)) as $member) {
+            $written[explode('.', explode('|', $member)[0])[0]] = true;
+        }
+
+        return $written;
+    }
+
+    /**
+     * The members a statement may write anywhere inside it, as `path|property:name` or `path|method:name` for any call
+     * with arguments, which may be a setter.
+     *
+     * @return array<string, true>
+     */
+    private static function writtenMembers(Node $statement): array
+    {
+        $written = [];
+        foreach (new NodeFinder()->find([$statement], static fn (Node $node): bool => $node instanceof Assign || $node instanceof AssignOp || $node instanceof AssignRef || $node instanceof MethodCall || $node instanceof NullsafeMethodCall) as $node) {
+            if (($node instanceof MethodCall || $node instanceof NullsafeMethodCall) && $node->name instanceof Identifier && !$node->isFirstClassCallable() && [] !== $node->getArgs()) {
+                $path = self::receiverPath($node->var);
+                // The receiver of a fluent chain is the object at its start.
+                for ($receiver = $node->var; null === $path && ($receiver instanceof MethodCall || $receiver instanceof NullsafeMethodCall);) {
+                    $receiver = $receiver->var;
+                    $path = self::receiverPath($receiver);
+                }
+                if (null !== $path) {
+                    $written[$path.'|method:'.$node->name->toString()] = true;
+                }
+            } elseif (($node instanceof Assign || $node instanceof AssignOp || $node instanceof AssignRef)
+                && ($node->var instanceof PropertyFetch || $node->var instanceof NullsafePropertyFetch) && $node->var->name instanceof Identifier
+                && null !== ($path = self::receiverPath($node->var->var))) {
+                $written[$path.'|property:'.$node->var->name->toString()] = true;
+            }
+        }
+
+        return $written;
+    }
+
+    /**
+     * What has to hold for a condition to be true, when it tests a member against constants: `$membership->getState()
+     * === MembershipState::Active`, `!==`, `in_array(…)`, a `match` that yields booleans, or a variable assigned one.
+     *
+     * @param array<string, Decision> $decisions
+     *
+     * @return Condition|null
+     */
+    private static function condition(Expr $condition, array $decisions): ?array
+    {
+        if ($condition instanceof BooleanNot) {
+            $inner = self::condition($condition->expr, $decisions);
+
+            return null === $inner ? null : self::negate($inner);
+        }
+        $decision = $condition instanceof Variable && \is_string($condition->name) ? ($decisions[$condition->name] ?? null)
+            : ($condition instanceof Match_ ? self::decision($condition) : null);
+        if (null !== $decision) {
+            // Without a default arm a value the arms do not list throws an UnhandledMatchError: it never gets here either.
+            return true === $decision[4] ? [$decision[0], $decision[1], false, $decision[3], true] : [$decision[0], $decision[1], true, $decision[2], true];
+        }
+        if ($condition instanceof Identical || $condition instanceof NotIdentical || $condition instanceof Equal || $condition instanceof NotEqual) {
+            [$subject, $value] = null !== self::subject($condition->left) ? [self::subject($condition->left), self::constant($condition->right)] : [self::subject($condition->right), self::constant($condition->left)];
+
+            return null === $subject || null === $value ? null : [$subject[0], $subject[1], $condition instanceof Identical || $condition instanceof Equal, [$value], true];
+        }
+        if ($condition instanceof FuncCall && $condition->name instanceof Name && 'in_array' === $condition->name->toLowerString() && !$condition->isFirstClassCallable()
+            && \count($condition->getArgs()) >= 2 && null !== ($subject = self::subject($condition->getArgs()[0]->value)) && $condition->getArgs()[1]->value instanceof Array_) {
+            $values = [];
+            foreach ($condition->getArgs()[1]->value->items as $item) {
+                $value = null === $item->key && !$item->unpack ? self::constant($item->value) : null;
+                if (null === $value) {
+                    return null;
+                }
+                $values[] = $value;
+            }
+
+            return [$subject[0], $subject[1], true, $values, true];
+        }
+
+        return null;
+    }
+
+    /** @return Decision|null */
+    private static function decision(Match_ $match): ?array
+    {
+        $subject = self::subject($match->cond);
+        if (null === $subject) {
+            return null;
+        }
+        $decision = [$subject[0], $subject[1], [], [], null];
+        foreach ($match->arms as $arm) {
+            $result = $arm->body instanceof ConstFetch ? $arm->body->name->toLowerString() : null;
+            if ('true' !== $result && 'false' !== $result) {
+                return null;
+            }
+            if (null === $arm->conds) {
+                $decision[4] = 'true' === $result;
+                continue;
+            }
+            foreach ($arm->conds as $cond) {
+                $value = self::constant($cond);
+                if (null === $value) {
+                    return null;
+                }
+                $decision['true' === $result ? 2 : 3][] = $value;
+            }
+        }
+
+        return $decision;
+    }
+
+    /**
+     * @param Condition $condition
+     *
+     * @return Condition
+     */
+    private static function negate(array $condition): array
+    {
+        $condition[2] = !$condition[2];
+
+        return $condition;
+    }
+
+    /** @return array{string, string}|null the receiver path and member a getter call or property fetch reads */
+    private static function subject(Expr $expr): ?array
+    {
+        if (($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall) && $expr->name instanceof Identifier && !$expr->isFirstClassCallable() && [] === $expr->getArgs()
+            && null !== ($path = self::receiverPath($expr->var))) {
+            return [$path, 'method:'.$expr->name->toString()];
+        }
+        if (($expr instanceof PropertyFetch || $expr instanceof NullsafePropertyFetch) && $expr->name instanceof Identifier && null !== ($path = self::receiverPath($expr->var))) {
+            return [$path, 'property:'.$expr->name->toString()];
+        }
+
+        return null;
+    }
+
+    /** A value known without running the code: `Enum::Case` and other class constants, true, false, null, strings and integers. */
+    private static function constant(Expr $expr): ?string
+    {
+        if ($expr instanceof ClassConstFetch && $expr->class instanceof Name && $expr->name instanceof Identifier
+            && !\in_array($expr->class->toLowerString(), ['self', 'static', 'parent'], true)) {
+            return ltrim($expr->class->toString(), '\\').'::'.$expr->name->toString();
+        }
+        if ($expr instanceof ConstFetch && \in_array($expr->name->toLowerString(), ['true', 'false', 'null'], true)) {
+            return $expr->name->toLowerString();
+        }
+
+        return $expr instanceof String_ ? var_export($expr->value, true) : ($expr instanceof Int_ ? (string) $expr->value : null);
     }
 
     /**

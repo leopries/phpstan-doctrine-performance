@@ -94,6 +94,15 @@ loops.
   (`$order->setCustomer($customer)` with a fixed `$customer`), or be a `new`
   object or `null`. A value that changes every iteration, such as
   `getReference()`, can be a different proxy every time and is still reported.
+- An association read behind a condition on the entity's state that the code
+  already decided: the state is set to a constant (`setState(State::Invited)`,
+  also in a fluent chain, or `$entity->state = …`) before the condition, in
+  the same method or right before calling the method that holds it. Recognized
+  conditions compare a getter or property with constants through `===`, `!==`,
+  `in_array()` or a `match` that yields booleans, directly or through a local
+  variable, and guard the read with `if` or an early `return`/`continue`.
+  A method that changes the state itself before its condition, or a state set
+  only behind a condition, decides nothing.
 
 ## Severity
 

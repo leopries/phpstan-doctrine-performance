@@ -15,7 +15,7 @@ use PHPStan\Rules\RuleErrorBuilder;
  *
  * @phpstan-import-type Call from EntityArgumentCollector
  *
- * @phpstan-type Load array{path: string, cause: string, toOne: bool, target: string, conditional: bool, uncertain: bool, chain: list<string>, origin: string}
+ * @phpstan-type Load array{path: string, cause: string, toOne: bool, target: string, conditional: bool, uncertain: bool, chain: list<string>, origin: string, conditions: list<array{string, bool, list<string>}>}
  *
  * @implements Rule<CollectedDataNode>
  */
@@ -69,8 +69,13 @@ final class IndirectLazyAssociationRule implements Rule
                     continue;
                 }
 
-                $load = ['path' => $read['path'], 'cause' => $read['cause'], 'toOne' => $read['toOne'], 'target' => $read['target'], 'conditional' => $read['conditional'], 'uncertain' => false, 'chain' => [$read['method']], 'origin' => $file.':'.$read['line']];
+                $load = ['path' => $read['path'], 'cause' => $read['cause'], 'toOne' => $read['toOne'], 'target' => $read['target'], 'conditional' => $read['conditional'], 'uncertain' => false, 'chain' => [$read['method']], 'origin' => $file.':'.$read['line'], 'conditions' => $read['conditions']];
                 $known = $this->reads[$read['method']][$read['param']][$read['path']] ?? null;
+                if (null !== $known && $known['conditions'] !== $load['conditions']) {
+                    // Reads of the same association behind different conditions: a state may skip one but not the other.
+                    $load['conditions'] = $known['conditions'] = [];
+                    $this->reads[$read['method']][$read['param']][$read['path']] = $known;
+                }
                 if (null === $known || self::weight($load) > self::weight($known)) {
                     $this->reads[$read['method']][$read['param']][$read['path']] = $load;
                 }
@@ -101,7 +106,7 @@ final class IndirectLazyAssociationRule implements Rule
                         // Skipped: a fetch join the calling method is known to have made or an association it assigned itself, an
                         // association the loop itself reads on the same entity, which the direct rule reports, and one an earlier call
                         // of the same iteration or of an earlier loop over the same entities loaded. Anything else is unknown here.
-                        if (!\in_array($path, $argument['fetched'], true)
+                        if (!\in_array($path, $argument['fetched'], true) && ('' !== $argument['path'] || !AssociationAccess::excluded($argument['states'], $load['conditions']))
                             && [] === array_intersect($call['loops'], $direct[$file][($argument['variable'] ?? '').'.'.$argument['path'].$path] ?? [])
                             && (null === $iteration || (($directLines[$file][$iteration] ?? $call['line']) >= $call['line'] && !isset($loaded[$file][$iteration])))
                             && (!isset($loads[$path]) || self::weight($load) > self::weight($loads[$path]))) {
@@ -193,11 +198,13 @@ final class IndirectLazyAssociationRule implements Rule
                 }
                 foreach ($call['callees'] as $callee) {
                     foreach ($this->through($callee, $index) as $load) {
-                        if (\count($load['chain']) >= self::MAX_CHAIN) {
+                        // A state the method sets before the call can skip the callee's guarded reads.
+                        if (\count($load['chain']) >= self::MAX_CHAIN || ('' === $argument['path'] && AssociationAccess::excluded($argument['states'], $load['conditions']))) {
                             continue;
                         }
                         // `$this->customers->map($order->getCustomer())` hands on an association: the callee's paths continue from there.
-                        $load = ['path' => $argument['path'].$load['path'], 'conditional' => $load['conditional'] || $call['conditional'], 'chain' => [$method, ...$load['chain']]] + $load;
+                        // shortcut: conditions are decided by the direct caller only; further up, other code may change the state first.
+                        $load = ['path' => $argument['path'].$load['path'], 'conditional' => $load['conditional'] || $call['conditional'], 'chain' => [$method, ...$load['chain']], 'conditions' => []] + $load;
                         if (!isset($loads[$load['path']]) || self::weight($load) > self::weight($loads[$load['path']])) {
                             $loads[$load['path']] = $load;
                         }

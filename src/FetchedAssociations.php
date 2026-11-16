@@ -106,6 +106,14 @@ final class FetchedAssociations
         return $properties;
     }
 
+    /** Whether every return of a method returns `$this`, as a fluent setter does. */
+    public function returnsThis(ClassReflection $class, string $name): bool
+    {
+        $returns = array_filter($this->nodes($this->getMethod($class, $name)->stmts ?? []), static fn (Node $node): bool => $node instanceof Return_);
+
+        return [] !== $returns && array_all($returns, static fn (Return_ $return): bool => $return->expr instanceof Variable && 'this' === $return->expr->name);
+    }
+
     /** @param array<string, true> $visited
      * @return Source|null
      */

@@ -151,6 +151,14 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
         ]);
     }
 
+    public function testStateGuardedAssociations(): void
+    {
+        // Invited never satisfies the condition on 160, nor gets past the `continue` on 173; Active does on 166.
+        $this->analyse([__DIR__.'/fixtures/guarded-state.php'], [
+            ['Potential lazy Doctrine association Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\Membership::$community accessed inside a loop. Potential N+1 queries; fetch-join or batch-load the association before the loop.', 167],
+        ]);
+    }
+
     public function testBoundedLoops(): void
     {
         $single = 'Doctrine query find() executes inside a loop. Potential N+1 queries. Batch queries or fetch the data before the loop.';
@@ -218,6 +226,7 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
         require_once __DIR__.'/fixtures/association-usage.php';
         require_once __DIR__.'/fixtures/fetched-associations.php';
         require_once __DIR__.'/fixtures/already-loaded.php';
+        require_once __DIR__.'/fixtures/guarded-state.php';
 
         return self::getContainer()->getByType(DoctrineQueryInLoopRule::class);
     }
