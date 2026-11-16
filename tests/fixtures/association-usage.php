@@ -30,50 +30,50 @@ function safeReferenceUses(array $orders): array
     return $customers;
 }
 
-/** @param list<Order> $orders */
-function unsafeUses(array $orders, \ArrayAccess $arrayAccess): void
+/** Each loop gets its own orders: a later loop over the same array finds the customers already loaded. */
+function unsafeUses(\ArrayAccess $arrayAccess): void
 {
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $order->getCustomer()->getName();
         $order->getCustomer()->getName(); // repeated access in the same iteration is reported once
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $customer = $order->getCustomer();
         $customer->getName();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $other = $order->getCustomer();
         $other->getId();
         $other->getName();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         inspectCustomer($order->getCustomer());
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $order->getCustomer()->getMisleadingIdentifier();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $arrayAccess[] = $order->getCustomer();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $aliasSource = $order->getCustomer();
         $alias = $aliasSource;
         $alias->getName();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $captured = $order->getCustomer();
         $callback = static fn () => $captured->getName();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $capturedInClosure = $order->getCustomer();
         $closure = static function () use ($capturedInClosure): string {
             return $capturedInClosure->getName();
         };
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $order->getCustomers()->count();
     }
-    foreach ($orders as $order) {
+    foreach (orders() as $order) {
         $other = $order->getCustomer();
         $other->getRegion()->getId();
     }
@@ -82,4 +82,10 @@ function unsafeUses(array $orders, \ArrayAccess $arrayAccess): void
 function inspectCustomer(Customer $customer): void
 {
     $customer->getName();
+}
+
+/** @return list<Order> */
+function orders(): array
+{
+    return [];
 }

@@ -7,6 +7,7 @@ use Doctrine\ORM\Mapping\ClassMetadata;
 use PhpParser\Node;
 use PhpParser\Node\Expr;
 use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Expr\NullsafeMethodCall;
 use PhpParser\Node\Expr\NullsafePropertyFetch;
 use PhpParser\Node\Expr\PropertyFetch;
@@ -56,12 +57,49 @@ final class AssociationAccess
         return $associations;
     }
 
-    /** Not a load: eager mappings, receivers that were fetch-joined, and uses of only the reference or the identifier. */
+    /**
+     * Not a load: eager mappings, receivers that were fetch-joined, associations the code itself put into the object
+     * earlier in the iteration, and uses of only the reference or the identifier.
+     */
     public function loads(MethodCall|PropertyFetch $node, Scope $scope, string $property, AssociationMapping $mapping): bool
     {
         return ClassMetadata::FETCH_EAGER !== $mapping->fetch
             && !$this->fetchedAssociations->isFetched($node->var, $property, $scope)
+            && !\in_array($property, $this->assignedProperties($node->var, $node, $scope), true)
             && !$this->onlyUsesReferenceOrIdentifier($node, $scope, $mapping->targetEntity, $mapping->isToOne());
+    }
+
+    /**
+     * The associations of an object that hold what the code put there, not a lazy proxy: all of them for an object
+     * created with `new`, otherwise those assigned directly or through a setter earlier in the same iteration.
+     *
+     * @return list<string>
+     */
+    public function assignedProperties(Expr $object, Node $annotated, Scope $scope): array
+    {
+        $classes = TypeCombinator::removeNull($scope->getType($object))->getObjectClassReflections();
+        if ($object instanceof New_) {
+            $members = ['*'];
+        } else {
+            $members = LoopDepthVisitor::assignedMembers($annotated, $object, LoopDepthVisitor::changingDepth($object, $annotated));
+        }
+
+        $properties = [];
+        foreach ($members as $member) {
+            if (str_starts_with($member, 'property:')) {
+                $properties[] = substr($member, 9);
+                continue;
+            }
+            foreach ($classes as $class) {
+                if ('*' === $member) {
+                    array_push($properties, ...array_keys($this->metadataResolver->getClassMetadata($class->getName())->associationMappings ?? []));
+                } elseif (str_starts_with($member, 'method:')) {
+                    array_push($properties, ...$this->fetchedAssociations->getAssignedProperties($class, substr($member, 7)));
+                }
+            }
+        }
+
+        return array_values(array_unique($properties));
     }
 
     /** What the findings of one association are grouped by, whichever rule reports them. */

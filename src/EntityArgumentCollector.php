@@ -21,7 +21,7 @@ use PHPStan\Type\TypeCombinator;
  * Records calls to project methods that hand an entity on: a parameter of the calling method (the callee's loads
  * become the caller's), or an entity that changes with an enclosing loop (the call site of a potential finding).
  *
- * @phpstan-type Argument array{depth: int, fetched: list<string>, param: int|null, variable: string|null, path: string}
+ * @phpstan-type Argument array{depth: int, fetched: list<string>, param: int|null, variable: string|null, iteration: string|null, path: string}
  * @phpstan-type Call array{caller: string|null, line: int, loops: list<int>, callees: list<string>, conditional: bool, args: array<int, Argument>}
  *
  * @implements Collector<CallLike, Call>
@@ -79,8 +79,11 @@ final class EntityArgumentCollector implements Collector
             $depth = min($loops, LoopDepthVisitor::changingDepth($argument->value, $node));
             if (null !== $param || $depth > 0) {
                 $arguments[$index] = [
-                    'depth' => $depth, 'fetched' => $depth > 0 ? $this->fetched($argument->value, $type, $scope) : [],
-                    'param' => $param, 'variable' => $root[0] ?? null, 'path' => $root[1] ?? '',
+                    'depth' => $depth,
+                    // Associations the calling method put into the entity itself load nothing either.
+                    'fetched' => $depth > 0 ? array_values(array_unique([...$this->fetched($argument->value, $type, $scope), ...$this->associations->assignedProperties($argument->value, $node, $scope)])) : [],
+                    'param' => $param, 'variable' => $root[0] ?? null,
+                    'iteration' => null === $root ? null : LoopDepthVisitor::iterationKey($node, $root[0]), 'path' => $root[1] ?? '',
                 ];
             }
         }

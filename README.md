@@ -84,7 +84,16 @@ loops.
   query builder chain, followed through repository and service methods), mapped
   as eager, only compared with `===`, returned or stored, or of which only the
   identifier is read.
-- The same association of the same variable a second time in one iteration.
+- The same association of the same variable a second time in one iteration,
+  directly or through a call.
+- An association a later `foreach` over the same, unchanged array reads again:
+  the first loop already loaded it for the same entities.
+- An association the code puts into the entity itself: entities created with
+  `new`, and associations assigned directly or through a setter earlier in the
+  same iteration. The assigned value must not change in the loop
+  (`$order->setCustomer($customer)` with a fixed `$customer`), or be a `new`
+  object or `null`. A value that changes every iteration, such as
+  `getReference()`, can be a different proxy every time and is still reported.
 
 ## Severity
 

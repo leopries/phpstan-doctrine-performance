@@ -79,6 +79,33 @@ final class FetchedAssociations
             ? $expr->name->toString() : null;
     }
 
+    /**
+     * The properties a method sets unconditionally from one of its parameters, as a setter does: `$this->customer = $customer;`.
+     *
+     * @return list<string>
+     */
+    public function getAssignedProperties(ClassReflection $class, string $name): array
+    {
+        $method = $this->getMethod($class, $name);
+        $parameters = [];
+        foreach ($method->params ?? [] as $param) {
+            if ($param->var instanceof Variable && \is_string($param->var->name)) {
+                $parameters[$param->var->name] = true;
+            }
+        }
+
+        $properties = [];
+        foreach ($method->stmts ?? [] as $stmt) {
+            $assign = $stmt instanceof Expression ? $stmt->expr : null;
+            if ($assign instanceof Assign && $assign->var instanceof PropertyFetch && $assign->var->var instanceof Variable && 'this' === $assign->var->var->name
+                && $assign->var->name instanceof Identifier && $assign->expr instanceof Variable && \is_string($assign->expr->name) && isset($parameters[$assign->expr->name])) {
+                $properties[] = $assign->var->name->toString();
+            }
+        }
+
+        return $properties;
+    }
+
     /** @param array<string, true> $visited
      * @return Source|null
      */

@@ -179,6 +179,71 @@ final class Service
         }
     }
 
+    /** The variants that run() calls after map() in the same iteration, each on entities of its own. */
+    public function separateLoops(): void
+    {
+        foreach ($this->orders() as $order) {
+            $this->mapper->forward($order);
+        }
+        foreach ($this->orders() as $order) {
+            $this->mapper->chained($order);
+        }
+        foreach ($this->orders() as $order) {
+            Row::fromOrder($order);
+        }
+        foreach ($this->orders() as $order) {
+            $this->formatter->format($order);
+        }
+        foreach ($this->orders() as $order) {
+            $this->customers->map($order->getCustomer());
+        }
+        foreach ($this->orders() as $order) {
+            foreach ($this->orders() as $other) {
+                $this->mapper->map($order);
+            }
+        }
+    }
+
+    /** @param list<Order> $orders */
+    public function loadedByEarlierLoop(array $orders): void
+    {
+        foreach ($orders as $order) {
+            $this->mapper->map($order);
+        }
+        foreach ($orders as $order) {
+            $this->mapper->map($order);
+        }
+        $orders[] = new Order();
+        foreach ($orders as $order) {
+            $this->mapper->map($order);
+        }
+    }
+
+    public function assignedBefore(Customer $customer): void
+    {
+        foreach ($this->orders() as $order) {
+            $fresh = new Order();
+            $this->mapper->map($fresh);
+        }
+        foreach ($this->orders() as $order) {
+            $this->mapper->map(new Order());
+        }
+        foreach ($this->orders() as $order) {
+            $order->setCustomer($customer);
+            $this->mapper->map($order);
+        }
+        foreach ($this->orders() as $order) {
+            $order->setCustomer($this->manager->getReference(Customer::class, $order->id));
+            $this->mapper->map($order);
+        }
+    }
+
+    /** @return list<Order> */
+    private function orders(): array
+    {
+        return [];
+    }
+
     /** @return list<Order> */
     private function joined(): array
     {

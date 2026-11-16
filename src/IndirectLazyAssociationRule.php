@@ -55,10 +55,16 @@ final class IndirectLazyAssociationRule implements Rule
     {
         $this->reads = $this->passes = $this->descendants = $this->loads = [];
         $direct = [];
+        // The first line, by iteration and association path, at which a loop reads an association directly.
+        $directLines = [];
         foreach ($node->get(ParameterAssociationCollector::class) as $file => $reads) {
             foreach ($reads as $read) {
                 $key = $read['variable'].'.'.$read['path'];
                 $direct[$file][$key] = [...$direct[$file][$key] ?? [], ...$read['loops']];
+                if (null !== $read['iteration'] && [] !== $read['loops']) {
+                    $key = $read['iteration'].'|'.$read['path'];
+                    $directLines[$file][$key] = min($directLines[$file][$key] ?? $read['line'], $read['line']);
+                }
                 if (null === $read['param']) {
                     continue;
                 }
@@ -82,19 +88,28 @@ final class IndirectLazyAssociationRule implements Rule
         $this->descendants = ClassHierarchyCollector::descendants($node);
 
         $errors = [];
+        // What earlier calls loaded, by iteration and association path: a second call on the same entities loads nothing.
+        $loaded = [];
         foreach ($sites as [$file, $call]) {
+            $loading = [];
             foreach ($call['callees'] as $callee) {
                 $loads = [];
                 $depth = 0;
                 foreach ($call['args'] as $index => $argument) {
                     foreach (0 === $argument['depth'] ? [] : $this->through($callee, $index) as $path => $load) {
-                        // Skipped: a fetch join the calling method is known to have made, and an association the loop itself reads on the
-                        // same variable, which the direct rule reports. Anything else about the argument's state is unknown here.
+                        $iteration = null === $argument['iteration'] ? null : $argument['iteration'].'|'.$argument['path'].$path;
+                        // Skipped: a fetch join the calling method is known to have made or an association it assigned itself, an
+                        // association the loop itself reads on the same entity, which the direct rule reports, and one an earlier call
+                        // of the same iteration or of an earlier loop over the same entities loaded. Anything else is unknown here.
                         if (!\in_array($path, $argument['fetched'], true)
                             && [] === array_intersect($call['loops'], $direct[$file][($argument['variable'] ?? '').'.'.$argument['path'].$path] ?? [])
+                            && (null === $iteration || (($directLines[$file][$iteration] ?? $call['line']) >= $call['line'] && !isset($loaded[$file][$iteration])))
                             && (!isset($loads[$path]) || self::weight($load) > self::weight($loads[$path]))) {
                             $loads[$path] = $load;
                             $depth = max($depth, $argument['depth']);
+                        }
+                        if (null !== $iteration) {
+                            $loading[$iteration] = true;
                         }
                     }
                 }
@@ -128,6 +143,7 @@ final class IndirectLazyAssociationRule implements Rule
                     $errors[$file.':'.$call['line'].':'.$error->getMessage()] = $error;
                 }
             }
+            $loaded[$file] = ($loaded[$file] ?? []) + $loading;
         }
         $this->reads = $this->passes = $this->descendants = $this->loads = [];
 

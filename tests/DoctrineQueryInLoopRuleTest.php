@@ -115,17 +115,39 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
     {
         $message = 'Potential lazy Doctrine association Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\Order::$customer accessed inside a loop. Potential N+1 queries; fetch-join or batch-load the association before the loop.';
         $this->analyse([__DIR__.'/fixtures/fetched-associations.php'], [
-            [$message, 95],
-            [$message, 98],
-            [$message, 101],
-            [$message, 104],
-            [$message, 107],
-            [$message, 111],
-            [$message, 116],
-            [$message, 126],
-            [$message, 137],
-            ['Potential lazy Doctrine association Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\Order::$contact accessed inside a loop. Potential N+1 queries; fetch-join or batch-load the association before the loop.', 145],
-            [$message, 161],
+            [$message, 96],
+            [$message, 99],
+            [$message, 102],
+            [$message, 105],
+            [$message, 108],
+            // A different replacement in every iteration may be a different proxy every time.
+            [$message, 112],
+            [$message, 117],
+            [$message, 127],
+            [$message, 138],
+            ['Potential lazy Doctrine association Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\Order::$contact accessed inside a loop. Potential N+1 queries; fetch-join or batch-load the association before the loop.', 147],
+            [$message, 163],
+        ]);
+    }
+
+    public function testAlreadyLoadedAssociations(): void
+    {
+        $prefix = 'Potential lazy Doctrine association Leopries\PHPStanDoctrinePerformance\Tests\Fixtures\Order::$';
+        $suffix = ' accessed inside a loop. Potential N+1 queries; fetch-join or batch-load the association before the loop.';
+        $this->analyse([__DIR__.'/fixtures/already-loaded.php'], [
+            // 13 reads the customers the loop on 8 loaded for the same orders.
+            [$prefix.'customer'.$suffix, 9],
+            [$prefix.'contact'.$suffix, 16],
+            // 18 adds an order, and the closure on 32 receives the array: the later loops may see other orders.
+            [$prefix.'customer'.$suffix, 21],
+            [$prefix.'customer'.$suffix, 29],
+            [$prefix.'customer'.$suffix, 33],
+            // New orders (47, 48), a customer that stays the same (52), null (54) and a new customer (59) are no proxies.
+            [$prefix.'customer'.$suffix, 64],
+            // Assigned only behind a condition, reassigned before the read, and assigned before the loop.
+            [$prefix.'customer'.$suffix, 70],
+            [$prefix.'customer'.$suffix, 75],
+            [$prefix.'customer'.$suffix, 79],
         ]);
     }
 
@@ -195,6 +217,7 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
         require_once __DIR__.'/fixtures/value-flow.php';
         require_once __DIR__.'/fixtures/association-usage.php';
         require_once __DIR__.'/fixtures/fetched-associations.php';
+        require_once __DIR__.'/fixtures/already-loaded.php';
 
         return self::getContainer()->getByType(DoctrineQueryInLoopRule::class);
     }

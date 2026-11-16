@@ -16,7 +16,7 @@ use PHPStan\Type\Doctrine\ObjectMetadataResolver;
  * `$order->getCustomer()->getName()`. A loop that calls such a method loads the association once per iteration.
  * Reads on any variable inside a loop are recorded as well: they are what the direct rule already reports.
  *
- * @phpstan-type Read array{method: string, param: int|null, variable: string, loops: list<int>, path: string, cause: string, toOne: bool, target: string, line: int, conditional: bool}
+ * @phpstan-type Read array{method: string, param: int|null, variable: string, iteration: string|null, loops: list<int>, path: string, cause: string, toOne: bool, target: string, line: int, conditional: bool}
  *
  * @implements Collector<Expr, Read>
  */
@@ -60,7 +60,7 @@ final class ParameterAssociationCollector implements Collector
         }
 
         return [
-            'method' => $class->getName().'::'.$function->getName(), 'param' => $param, 'variable' => $root[0], 'loops' => $loops, 'path' => $root[1].$property,
+            'method' => $class->getName().'::'.$function->getName(), 'param' => $param, 'variable' => $root[0], 'iteration' => LoopDepthVisitor::iterationKey($node, $root[0]), 'loops' => $loops, 'path' => $root[1].$property,
             'cause' => AssociationAccess::cause($owner, $property, $mapping),
             'toOne' => $mapping->isToOne(), 'target' => $mapping->targetEntity, 'line' => $node->getStartLine(),
             'conditional' => true === $node->getAttribute(LoopDepthVisitor::CONDITIONAL_ATTRIBUTE),

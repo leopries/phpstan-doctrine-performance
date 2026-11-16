@@ -89,7 +89,8 @@ final class FetchedAssociationConsumer
         $this->inspectGroups($groups);
     }
 
-    public function unsafeReads(bool $fetch, Customer $replacement): void
+    /** @param array<int, Customer> $replacement */
+    public function unsafeReads(bool $fetch, array $replacement): void
     {
         foreach ($this->loader->joinedOnly() as $order) {
             $order->getCustomer()->getName();
@@ -107,12 +108,12 @@ final class FetchedAssociationConsumer
             $order->getCustomer()->getName();
         }
         foreach ($this->loader->fetched() as $order) {
-            $order->setCustomer($replacement);
+            $order->setCustomer($replacement[$order->id]);
             $order->getCustomer()->getName();
         }
         foreach ($this->loader->fetched() as $order) {
             $alias = $order;
-            $alias->setCustomer($replacement);
+            $alias->setCustomer($replacement[$order->id]);
             $order->getCustomer()->getName();
         }
         $this->inspectMixed($this->loader->fetched());
@@ -138,10 +139,11 @@ final class FetchedAssociationConsumer
         }
     }
 
-    public function propertyReplacement(Customer $replacement): void
+    /** @param array<int, Customer> $replacement */
+    public function propertyReplacement(array $replacement): void
     {
         foreach ($this->loader->otherAssociation() as $order) {
-            $order->contact = $replacement;
+            $order->contact = $replacement[$order->id];
             $order->contact?->getName();
         }
     }

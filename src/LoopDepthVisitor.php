@@ -11,6 +11,7 @@ use PhpParser\Node\ArrayItem;
 use PhpParser\Node\Expr;
 use PhpParser\Node\Expr\Array_;
 use PhpParser\Node\Expr\ArrayDimFetch;
+use PhpParser\Node\ClosureUse;
 use PhpParser\Node\Expr\ArrowFunction;
 use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\AssignOp;
@@ -26,6 +27,7 @@ use PhpParser\Node\Expr\Closure;
 use PhpParser\Node\Expr\ConstFetch;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\Instanceof_;
+use PhpParser\Node\Expr\List_;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Expr\NullsafeMethodCall;
@@ -56,6 +58,7 @@ use PhpParser\Node\Stmt\Foreach_;
 use PhpParser\Node\Stmt\If_;
 use PhpParser\Node\Stmt\Return_;
 use PhpParser\Node\Stmt\TryCatch;
+use PhpParser\Node\Stmt\Unset_;
 use PhpParser\Node\Stmt\While_;
 use PhpParser\NodeFinder;
 use PhpParser\NodeVisitorAbstract;
@@ -64,7 +67,11 @@ use PHPStan\Type\ObjectType;
 use PHPStan\Type\UnionType;
 
 /**
- * @phpstan-type Context array{guards: list<array{string, bool}>, conditional: bool, condition: bool, parameters: array<string, true>, chunks: array<string, true>}
+ * Assignment: receiver path, `*` for a new object or `property:name`/`method:name`, loop depth of the statement, and
+ * depth of the innermost loop that changes the assigned value (-1: never a lazy proxy).
+ *
+ * @phpstan-type Assignment array{string, string, int, int}
+ * @phpstan-type Context array{guards: list<array{string, bool}>, conditional: bool, condition: bool, parameters: array<string, true>, chunks: array<string, true>, assigned: list<Assignment>}
  */
 final class LoopDepthVisitor extends NodeVisitorAbstract
 {
@@ -75,7 +82,10 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
     public const string GUARDS_ATTRIBUTE = 'doctrinePerformanceGuards';
     public const string CONDITIONAL_ATTRIBUTE = 'doctrinePerformanceConditional';
     public const string CONDITION_ATTRIBUTE = 'doctrinePerformanceLoopCondition';
-    private const array CONTEXT = ['guards' => [], 'conditional' => false, 'condition' => false, 'parameters' => [], 'chunks' => []];
+    public const string LOOP_ITERATES_ATTRIBUTE = 'doctrinePerformanceLoopIterates';
+    public const string ASSIGNED_ATTRIBUTE = 'doctrinePerformanceAssigned';
+    private const string GROUP_ATTRIBUTE = 'doctrinePerformanceLoopGroup';
+    private const array CONTEXT = ['guards' => [], 'conditional' => false, 'condition' => false, 'parameters' => [], 'chunks' => [], 'assigned' => []];
     private const string ITERATES_ATTRIBUTE = 'doctrinePerformanceIterates';
     private const array ITERATING_FUNCTIONS = ['array_map', 'array_filter', 'array_walk', 'array_reduce', 'array_find', 'array_find_key', 'array_any', 'array_all', 'usort', 'uasort', 'uksort', 'iterator_apply'];
     private const array ITERATING_METHODS = ['map', 'filter', 'forall', 'exists', 'findfirst', 'reduce', 'partition', 'each'];
@@ -85,6 +95,10 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
 
     public function beforeTraverse(array $nodes): ?array
     {
+        $this->groupScope($nodes);
+        foreach (new NodeFinder()->findInstanceOf($nodes, FunctionLike::class) as $function) {
+            $this->groupScope($function->getStmts() ?? []);
+        }
         $variableUses = [];
         $this->collectVariableUses($nodes, null, $variableUses);
         foreach ($nodes as $node) {
@@ -125,6 +139,75 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
         }
 
         return 0;
+    }
+
+    /**
+     * Names the iteration that decides a variable at an annotated node: the innermost loop that iterates it as its value
+     * or assigns it. Loops over the same unchanged array share one name for their value: the second loop sees the
+     * entities, and the associations, the first one loaded. Null when no enclosing loop changes the variable.
+     */
+    public static function iterationKey(Node $annotated, string $variable): ?string
+    {
+        $loops = $annotated->getAttribute(self::LOOPS_ATTRIBUTE);
+        $iterates = $annotated->getAttribute(self::LOOP_ITERATES_ATTRIBUTE);
+        $variables = $annotated->getAttribute(self::LOOP_VARIABLES_ATTRIBUTE);
+        if (!\is_array($loops) || !\is_array($iterates) || !\is_array($variables)) {
+            return null;
+        }
+
+        for ($index = \count($loops) - 1; $index >= 0; --$index) {
+            $iterated = $iterates[$index] ?? null;
+            if (\is_array($iterated) && $iterated[1] === $variable) {
+                return '@'.$iterated[0];
+            }
+            if (\is_array($variables[$index] ?? null) && isset($variables[$index][$variable])) {
+                return $loops[$index].':'.$variable;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The variable and the property fetches or argument-less calls an expression is made of: `$order->getCustomer()`
+     * is `order.getCustomer`. Null for anything else.
+     */
+    public static function receiverPath(Expr $expr): ?string
+    {
+        $path = '';
+        while (($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall || $expr instanceof PropertyFetch || $expr instanceof NullsafePropertyFetch)
+            && $expr->name instanceof Identifier && (($expr instanceof PropertyFetch || $expr instanceof NullsafePropertyFetch) || [] === $expr->args)) {
+            $path = '.'.$expr->name->toString().$path;
+            $expr = $expr->var;
+        }
+
+        return $expr instanceof Variable && \is_string($expr->name) ? $expr->name.$path : null;
+    }
+
+    /**
+     * What earlier statements of the same iteration put into an object at an annotated node, so that reading it loads
+     * nothing: `*` when the object was created with `new`, `property:name` for an assigned property and `method:name`
+     * for a call with arguments, which may be a setter. Only statements inside the loops that change the object count,
+     * and only values those loops do not change: a different proxy in every iteration is still loaded every time.
+     *
+     * @return list<string>
+     */
+    public static function assignedMembers(Node $annotated, Expr $receiver, int $changingDepth): array
+    {
+        $path = self::receiverPath($receiver);
+        $assigned = $annotated->getAttribute(self::ASSIGNED_ATTRIBUTE, []);
+        if (null === $path || !\is_array($assigned)) {
+            return [];
+        }
+
+        $members = [];
+        foreach ($assigned as $assignment) {
+            if (\is_array($assignment) && $assignment[0] === $path && $assignment[2] >= $changingDepth && $assignment[3] < $changingDepth) {
+                $members[] = $assignment[1];
+            }
+        }
+
+        return $members;
     }
 
     /**
@@ -202,9 +285,10 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
      * @param array<string, list<string>>   $variableUses
      * @param list<int>                     $loops
      * @param list<array<string, int|true>> $loopVariables what changes per iteration, for each enclosing loop; see changingVariables()
+     * @param list<array{int, string|null}> $iterates     for each enclosing loop its group and the variable it iterates; see iterationKey()
      * @param Context                       $context
      */
-    private function annotate(Node $node, int $depth, ?Node $parent = null, array $variableUses = [], array $loops = [], array $loopVariables = [], array $context = self::CONTEXT): void
+    private function annotate(Node $node, int $depth, ?Node $parent = null, array $variableUses = [], array $loops = [], array $loopVariables = [], array $context = self::CONTEXT, array $iterates = []): void
     {
         if (($node instanceof FuncCall && $node->name instanceof Name && \in_array($node->name->toLowerString(), self::ITERATING_FUNCTIONS, true))
             || (($node instanceof MethodCall || $node instanceof NullsafeMethodCall) && $node->name instanceof Identifier && \in_array($node->name->toLowerString(), self::ITERATING_METHODS, true))) {
@@ -221,10 +305,12 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
                 ++$depth;
                 $loops[] = $node->getStartFilePos();
                 $loopVariables[] = $this->changingVariables($node);
+                $iterates[] = [$node->getStartFilePos(), null];
             } else {
                 $depth = 0;
                 $loops = [];
                 $loopVariables = [];
+                $iterates = [];
             }
             $context = self::CONTEXT;
             if ($node instanceof FunctionLike) {
@@ -252,6 +338,8 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
             $node->setAttribute(self::GUARDS_ATTRIBUTE, $context['guards']);
             $node->setAttribute(self::CONDITIONAL_ATTRIBUTE, $context['conditional']);
             $node->setAttribute(self::CONDITION_ATTRIBUTE, $context['condition']);
+            $node->setAttribute(self::LOOP_ITERATES_ATTRIBUTE, $iterates);
+            $node->setAttribute(self::ASSIGNED_ATTRIBUTE, $context['assigned']);
             $use = $this->describeUse($node, $parent);
             if ($parent instanceof Assign && $parent->expr === $node && $parent->var instanceof Variable && \is_string($parent->var->name)) {
                 $node->setAttribute(self::USES_ATTRIBUTE, $variableUses[$parent->var->name] ?? ['reference']);
@@ -272,12 +360,16 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
             $childDepth = $depth;
             $childLoops = $loops;
             $childVariables = $loopVariables;
+            $childIterates = $iterates;
             $childContext = $context;
             if ($isLoop && (!$node instanceof Foreach_ || 'stmts' === $name)
                 && (!$node instanceof For_ || \in_array($name, ['cond', 'loop', 'stmts'], true))) {
                 ++$childDepth;
                 $childLoops[] = $node->getStartFilePos();
                 $childVariables[] = $changing;
+                $group = $node->getAttribute(self::GROUP_ATTRIBUTE);
+                $childIterates[] = [\is_int($group) ? $group : $node->getStartFilePos(),
+                    $node instanceof Foreach_ && !$node->byRef && $node->valueVar instanceof Variable && \is_string($node->valueVar->name) ? $node->valueVar->name : null];
                 $childContext['conditional'] = false;
                 $childContext['condition'] = 'stmts' !== $name;
             }
@@ -293,7 +385,8 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
                 if (!$child instanceof Node) {
                     continue;
                 }
-                $this->annotate($child, $childDepth, $node, $variableUses, $childLoops, $childVariables, $childContext);
+                $this->annotate($child, $childDepth, $node, $variableUses, $childLoops, $childVariables, $childContext, $childIterates);
+                $childContext['assigned'] = $this->assignments($child, $childDepth, $childVariables, $childContext['assigned']);
 
                 // After `if (!$flush) { return; }` the rest of the block only runs when $flush is true.
                 $exit = $child instanceof If_ && [] === $child->elseifs && null === $child->else ? $this->parameterGuard($child->cond, $context['parameters']) : null;
@@ -303,6 +396,193 @@ final class LoopDepthVisitor extends NodeVisitorAbstract
                 }
             }
         }
+    }
+
+    /**
+     * The assignments still known after a statement: those to variables it reassigns are dropped, and an unconditional
+     * `$order = new Order()`, `$order->customer = $customer` or `$order->setCustomer($customer)` is added.
+     *
+     * @param list<array<string, int|true>> $loopVariables
+     * @param list<Assignment>              $assigned
+     *
+     * @return list<Assignment>
+     */
+    private function assignments(Node $statement, int $depth, array $loopVariables, array $assigned): array
+    {
+        if ([] !== $assigned) {
+            $reassigned = $this->reassignedVariables($statement);
+            $assigned = array_values(array_filter($assigned, static fn (array $assignment): bool => !isset($reassigned[explode('.', $assignment[0])[0]])));
+        }
+        if (!$statement instanceof Expression) {
+            return $assigned;
+        }
+
+        $expr = $statement->expr;
+        if ($expr instanceof Assign && $expr->var instanceof Variable && \is_string($expr->var->name) && $expr->expr instanceof New_) {
+            $assigned[] = [$expr->var->name, '*', $depth, -1];
+        } elseif ($expr instanceof Assign && ($expr->var instanceof PropertyFetch || $expr->var instanceof NullsafePropertyFetch) && $expr->var->name instanceof Identifier
+            && null !== ($path = self::receiverPath($expr->var->var))) {
+            $assigned[] = [$path, 'property:'.$expr->var->name->toString(), $depth, self::valueDepth($expr->expr, $depth, $loopVariables, $assigned)];
+        } elseif (($expr instanceof MethodCall || $expr instanceof NullsafeMethodCall) && $expr->name instanceof Identifier && !$expr->isFirstClassCallable()
+            && [] !== $expr->getArgs() && null !== ($path = self::receiverPath($expr->var))) {
+            $assigned[] = [$path, 'method:'.$expr->name->toString(), $depth, max(-1, ...array_map(static fn (Expr $value): int => self::valueDepth($value, $depth, $loopVariables, $assigned), self::argumentValues($expr)))];
+        }
+
+        return $assigned;
+    }
+
+    /**
+     * How deep the innermost loop sits that changes an assigned value: -1 for values that are never a lazy proxy (new
+     * objects, scalars, null), the statement's own depth for anything not understood, such as a getReference() call.
+     *
+     * @param list<array<string, int|true>> $loopVariables
+     * @param list<Assignment>              $assigned
+     */
+    private static function valueDepth(Expr $value, int $depth, array $loopVariables, array $assigned): int
+    {
+        if ($value instanceof New_ || $value instanceof Scalar || $value instanceof ConstFetch || $value instanceof ClassConstFetch || $value instanceof Array_) {
+            return -1;
+        }
+        if (!$value instanceof Variable || !\is_string($value->name)) {
+            return $depth;
+        }
+        foreach ($assigned as $assignment) {
+            if ($assignment[0] === $value->name && '*' === $assignment[1]) {
+                return -1;
+            }
+        }
+        for ($index = \count($loopVariables) - 1; $index >= 0; --$index) {
+            if (isset($loopVariables[$index][$value->name])) {
+                return $index + 1;
+            }
+        }
+
+        return 0;
+    }
+
+    /** @return array<string, true> the variables a statement may assign anywhere inside it */
+    private function reassignedVariables(Node $statement): array
+    {
+        $targets = [];
+        foreach (new NodeFinder()->find([$statement], static fn (Node $node): bool => $node instanceof Assign || $node instanceof AssignRef || $node instanceof AssignOp || $node instanceof Foreach_ || $node instanceof Unset_ || $node instanceof ClosureUse) as $node) {
+            if ($node instanceof Foreach_) {
+                array_push($targets, $node->valueVar, $node->keyVar);
+            } elseif ($node instanceof Unset_) {
+                array_push($targets, ...$node->vars);
+            } elseif ($node instanceof ClosureUse) {
+                $targets[] = $node->byRef ? $node->var : null;
+            } elseif ($node instanceof Assign || $node instanceof AssignRef || $node instanceof AssignOp) {
+                $targets[] = $node->var;
+            }
+        }
+
+        $variables = [];
+        foreach ($targets as $target) {
+            foreach ($target instanceof List_ || $target instanceof Array_ ? new NodeFinder()->findInstanceOf([$target], Variable::class) : [$target] as $variable) {
+                if ($variable instanceof Variable && \is_string($variable->name)) {
+                    $variables[$variable->name] = true;
+                }
+            }
+        }
+
+        return $variables;
+    }
+
+    /**
+     * Marks each `foreach` over a variable with the first earlier loop of the same function, at the same loop depth,
+     * that iterates the same variable while nothing changes it in between: both see the same entities.
+     *
+     * @param array<Node> $statements
+     */
+    private function groupScope(array $statements): void
+    {
+        $loops = [];
+        $nodes = [];
+        $this->scopeNodes($statements, '', $loops, $nodes);
+
+        $seen = [];
+        foreach ($loops as [$loop, $stack]) {
+            if (!$loop->expr instanceof Variable || !\is_string($loop->expr->name) || $loop->byRef) {
+                continue;
+            }
+            foreach (array_reverse($seen) as [$earlier, $earlierStack]) {
+                if ($earlier->expr instanceof Variable && $earlier->expr->name === $loop->expr->name && $earlierStack === $stack && $earlier->getEndFilePos() < $loop->getStartFilePos()) {
+                    if (!self::changedBetween($loop->expr->name, $nodes, $earlier->getStartFilePos(), $loop->getStartFilePos())) {
+                        $loop->setAttribute(self::GROUP_ATTRIBUTE, $earlier->getAttribute(self::GROUP_ATTRIBUTE, $earlier->getStartFilePos()));
+                    }
+                    break;
+                }
+            }
+            $seen[] = [$loop, $stack];
+        }
+    }
+
+    /**
+     * @param list<array{Foreach_, string}> $loops every foreach of the scope and the loops around it
+     * @param list<Node>                    $nodes every node of the scope, without nested functions and classes
+     */
+    private function scopeNodes(mixed $value, string $stack, array &$loops, array &$nodes): void
+    {
+        if (\is_array($value)) {
+            foreach ($value as $child) {
+                $this->scopeNodes($child, $stack, $loops, $nodes);
+            }
+
+            return;
+        }
+        if (!$value instanceof Node || $value instanceof FunctionLike || $value instanceof ClassLike) {
+            return;
+        }
+
+        $nodes[] = $value;
+        if ($value instanceof Foreach_) {
+            $loops[] = [$value, $stack];
+        }
+        if ($value instanceof Foreach_ || $value instanceof For_ || $value instanceof While_ || $value instanceof Do_) {
+            $stack .= '/'.$value->getStartFilePos();
+        }
+        foreach ($value->getSubNodeNames() as $name) {
+            $this->scopeNodes($value->{$name}, $stack, $loops, $nodes); // @phpstan-ignore property.dynamicName (Traverse PHP-Parser's declared subnodes.)
+        }
+    }
+
+    /**
+     * Whether anything between two positions may change what a variable holds: an assignment to it or into it,
+     * a reference to it, or a call that receives it. Conservative: an array handed to any method counts.
+     *
+     * @param list<Node> $nodes
+     */
+    private static function changedBetween(string $variable, array $nodes, int $from, int $to): bool
+    {
+        foreach ($nodes as $node) {
+            if ($node->getStartFilePos() < $from || $node->getStartFilePos() >= $to) {
+                continue;
+            }
+            $targets = match (true) {
+                $node instanceof Assign, $node instanceof AssignOp => [$node->var],
+                $node instanceof AssignRef => [$node->var, $node->expr],
+                $node instanceof Unset_ => $node->vars,
+                $node instanceof Foreach_ => array_filter([$node->valueVar, $node->keyVar, $node->byRef ? $node->expr : null]),
+                $node instanceof ClosureUse => $node->byRef ? [$node->var] : [],
+                $node instanceof MethodCall, $node instanceof NullsafeMethodCall => [$node->var, ...self::argumentValues($node)],
+                $node instanceof StaticCall, $node instanceof New_ => self::argumentValues($node),
+                $node instanceof FuncCall => !$node->name instanceof Name || \in_array($node->name->toLowerString(), self::REFERENCE_FUNCTIONS, true) ? self::argumentValues($node) : [],
+                default => [],
+            };
+            foreach ($targets as $target) {
+                if (self::changeKey($target, true) === $variable) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** @return list<Expr> */
+    private static function argumentValues(CallLike $call): array
+    {
+        return $call->isFirstClassCallable() ? [] : array_values(array_map(static fn (Arg $argument): Expr => $argument->value, $call->getArgs()));
     }
 
     /**

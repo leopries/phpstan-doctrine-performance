@@ -105,7 +105,8 @@ final class DoctrineQueryInLoopRule implements Rule
                 continue;
             }
 
-            // The first access initializes the association; repeating it in the same iteration costs nothing.
+            // The first access initializes the association; repeating it in the same iteration, or in a later loop over the
+            // same entities, costs nothing.
             if ($this->alreadyReported($node, $property, $scope)) {
                 return [];
             }
@@ -155,8 +156,9 @@ final class DoctrineQueryInLoopRule implements Rule
             return false;
         }
 
+        $iteration = LoopDepthVisitor::iterationKey($node, $receiver->name);
         $loops = $node->getAttribute(LoopDepthVisitor::LOOPS_ATTRIBUTE, []);
-        $key = ($scope->getFunction()?->getName() ?? '').'|'.(\is_array($loops) ? implode(',', $loops) : '').'|'.$receiver->name.$path.'|'.$property;
+        $key = ($scope->getFunction()?->getName() ?? '').'|'.($iteration ?? (\is_array($loops) ? implode(',', $loops) : '').'|'.$receiver->name).$path.'|'.$property;
         if (isset($this->reported[$key])) {
             return true;
         }
