@@ -83,7 +83,10 @@ loops.
 - An association that is fetch-joined (join and selected alias in the same
   query builder chain, followed through repository and service methods), mapped
   as eager, only compared with `===`, returned or stored, or of which only the
-  identifier is read.
+  identifier is read: directly, or through a getter whose single `return` reads
+  nothing of the entity but its identifier fields (`return (string) $this->id;`,
+  `return $this->id->toRfc4122();`). Proxies hold their identifier without
+  loading.
 - The same association of the same variable a second time in one iteration,
   directly or through a call.
 - An association a later `foreach` over the same, unchanged array reads again:
@@ -118,6 +121,7 @@ nested loops multiply the count`.
 | explicit read query per iteration | 50 |
 | write statement or lazy to-many collection per iteration | 45 |
 | lazy to-one association (identity map serves repeated targets) | 30 |
+| `find()` by identifier without a lock mode (identity map serves repeated identifiers) | 30 |
 | statically bounded loop | 10 |
 | nested loops | +25 |
 | file matches `hotPaths` | +10 |
@@ -126,7 +130,7 @@ nested loops multiply the count`.
 | read query that does not depend on the loop (run it once before the loop) | −10 |
 | lazy load inside a called method (fetch state unknown across the call) | −10 |
 | depends on which implementation of an interface runs | −10 |
-| target table has at most `smallTableRows` rows | −25 for to-one, else −10 |
+| target table has at most `smallTableRows` rows | −25 for to-one and `find()`, else −10 |
 | file matches `testPaths` (only with `reportTests`) | −40 |
 
 ## Configuration

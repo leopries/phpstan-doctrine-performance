@@ -89,3 +89,21 @@ function orders(): array
 {
     return [];
 }
+
+/** Methods that read only the identifier of the proxy do not load it, however they format it. */
+function identifierOnlyGetters(): void
+{
+    foreach (orders() as $order) {
+        $order->getCustomer()->getIdString();
+        $order->getCustomer()?->getIdNullsafe();
+    }
+    foreach (orders() as $order) {
+        $order->getCustomer()->getIdWithName();
+    }
+    foreach (orders() as $order) {
+        $order->getCustomer()->getIdThroughGetter(); // limitation: a call on $this is not followed
+    }
+    foreach (orders() as $order) {
+        $order->getCustomer()->getIdOfRegion();
+    }
+}

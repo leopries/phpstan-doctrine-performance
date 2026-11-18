@@ -25,6 +25,7 @@ final class Severity
     public const string FLUSH = 'flush';
     public const string TO_MANY = 'toMany';
     public const string TO_ONE = 'toOne';
+    public const string FIND = 'find';
     public const string BOUNDED = 'bounded';
     public const string LOOP_INDEPENDENT = 'same query every iteration, can run once before the loop';
 
@@ -35,6 +36,7 @@ final class Severity
         self::WRITE => [45, 'one write statement per iteration'],
         self::TO_MANY => [45, 'one collection load per owner, never served from the identity map'],
         self::TO_ONE => [30, 'to-one load, served from the identity map for repeated targets'],
+        self::FIND => [30, 'find() by identifier, served from the identity map for repeated identifiers'],
         self::BOUNDED => [10, 'fixed number of iterations'],
     ];
 
@@ -75,7 +77,7 @@ final class Severity
         if (null !== $rows && self::BOUNDED !== $kind) {
             if ($rows <= $this->smallTableRows) {
                 // Identity map lookups cap to-one loads and find() at the number of rows; other queries still run every time.
-                $reasons[] = [self::TO_ONE === $kind ? -25 : -10, \sprintf('small table (~%s rows)', self::formatRows($rows))];
+                $reasons[] = [self::TO_ONE === $kind || self::FIND === $kind ? -25 : -10, \sprintf('small table (~%s rows)', self::formatRows($rows))];
             } elseif ($rows >= $this->largeTableRows) {
                 $reasons[] = [10, \sprintf('large table (~%s rows)', self::formatRows($rows))];
             }
@@ -165,13 +167,14 @@ final class Severity
     /**
      * @param QueryCalls::* $queryKind
      *
-     * @return self::FLUSH|self::WRITE|self::QUERY
+     * @return self::FLUSH|self::WRITE|self::FIND|self::QUERY
      */
     public static function kind(string $queryKind): string
     {
         return match ($queryKind) {
             QueryCalls::FLUSH => self::FLUSH,
             QueryCalls::WRITE => self::WRITE,
+            QueryCalls::FIND => self::FIND,
             default => self::QUERY,
         };
     }

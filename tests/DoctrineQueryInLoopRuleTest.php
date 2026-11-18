@@ -101,6 +101,9 @@ final class DoctrineQueryInLoopRuleTest extends RuleTestCase
             [$prefix.'customer'.$suffix, 68],
             [$prefix.'customers'.$suffix, 74],
             [$prefix.'customer'.$suffix, 77],
+            [$prefix.'customer'.$suffix, 101],
+            [$prefix.'customer'.$suffix, 104],
+            [$prefix.'customer'.$suffix, 107],
         ]);
     }
 

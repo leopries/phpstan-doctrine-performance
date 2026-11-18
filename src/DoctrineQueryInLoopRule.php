@@ -81,7 +81,7 @@ final class DoctrineQueryInLoopRule implements Rule
                 }
                 $depth = $unbounded;
                 // A flush or a write has its effect in every iteration, whatever its arguments are.
-                $independent = QueryCalls::READ === $query['kind'] && !LoopDepthVisitor::dependsOnLoop($node, $scope);
+                $independent = \in_array($query['kind'], [QueryCalls::READ, QueryCalls::FIND], true) && !LoopDepthVisitor::dependsOnLoop($node, $scope);
 
                 return $this->errors(RuleErrorBuilder::message(\sprintf(
                     'Doctrine query %s() executes inside %s. %s Batch queries or fetch the data before the loop.',

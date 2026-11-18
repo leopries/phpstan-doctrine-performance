@@ -163,9 +163,10 @@ final class IndirectQueryInLoopRule implements Rule
                     'depth' => $call['depth'], 'chain' => [$call['query']], 'kind' => match ($call['kind']) {
                         QueryCalls::FLUSH => QueryCalls::FLUSH,
                         QueryCalls::WRITE => QueryCalls::WRITE,
+                        QueryCalls::FIND => QueryCalls::FIND,
                         default => QueryCalls::READ,
                     }, 'entity' => $call['entity'],
-                    'uncertain' => false, 'conditional' => $call['conditional'], 'writes' => QueryCalls::READ !== ($call['kind'] ?? QueryCalls::READ),
+                    'uncertain' => false, 'conditional' => $call['conditional'], 'writes' => \in_array($call['kind'], [QueryCalls::WRITE, QueryCalls::FLUSH], true),
                     'cause' => $method.' → '.$call['query'].'()', 'origin' => $call['file'].':'.$call['line'],
                 ];
             } else {

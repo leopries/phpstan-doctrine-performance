@@ -23,6 +23,8 @@ final class QueryCalls
     public const string READ = 'read';
     public const string WRITE = 'write';
     public const string FLUSH = 'flush';
+    /** find() by identifier: the identity map answers it for rows already loaded. */
+    public const string FIND = 'find';
 
     public function __construct(
         private readonly ObjectMetadataResolver $metadataResolver,
@@ -31,7 +33,7 @@ final class QueryCalls
     }
 
     /**
-     * @return array{kind: self::READ|self::WRITE|self::FLUSH, entity: string|null}|null
+     * @return array{kind: self::READ|self::FIND|self::WRITE|self::FLUSH, entity: string|null}|null
      */
     public function classify(Type $type, MethodCall $call, string $name, Scope $scope): ?array
     {
@@ -55,7 +57,12 @@ final class QueryCalls
             // The second-level cache answers find(), findAll(), findBy() and findOneBy(), magic finders included.
             $secondLevel = 'find' === $method || 'findall' === $method || str_starts_with($method, 'findby') || str_starts_with($method, 'findoneby');
 
-            return $secondLevel && $this->isSecondLevelCached($entity) ? null : ['kind' => self::READ, 'entity' => $entity?->getName()];
+            if ($secondLevel && $this->isSecondLevelCached($entity)) {
+                return null;
+            }
+
+            // A lock mode makes find() query even for an entity in the identity map.
+            return ['kind' => 'find' === $method && \count($call->getArgs()) <= 1 ? self::FIND : self::READ, 'entity' => $entity?->getName()];
         }
 
         if ((new ObjectType(ObjectManager::class))->isSuperTypeOf($type)->yes()) {
@@ -71,7 +78,11 @@ final class QueryCalls
                 ? ($scope->getType($argument->value)->getClassStringObjectType()->getObjectClassReflections()[0] ?? null)
                 : null;
 
-            return $this->isSecondLevelCached($entity) ? null : ['kind' => self::READ, 'entity' => $entity?->getName()];
+            if ($this->isSecondLevelCached($entity)) {
+                return null;
+            }
+
+            return ['kind' => 'find' === $method && \count($call->getArgs()) <= 2 ? self::FIND : self::READ, 'entity' => $entity?->getName()];
         }
 
         if (true === $call->var->getAttribute(CachedQueryVisitor::ATTRIBUTE)) {

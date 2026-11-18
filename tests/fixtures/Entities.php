@@ -49,6 +49,31 @@ class Customer
         return $this->name;
     }
 
+    public function getIdString(): string
+    {
+        return (string) $this->id;
+    }
+
+    public function getIdNullsafe(): string
+    {
+        return \sprintf('%d', $this->id);
+    }
+
+    public function getIdWithName(): string
+    {
+        return $this->id.$this->name;
+    }
+
+    public function getIdThroughGetter(): string
+    {
+        return (string) $this->getId();
+    }
+
+    public function getIdOfRegion(): int
+    {
+        return $this->region->id;
+    }
+
     public function getRegion(): Region
     {
         return $this->region;

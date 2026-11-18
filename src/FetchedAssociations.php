@@ -80,6 +80,40 @@ final class FetchedAssociations
     }
 
     /**
+     * The properties of `$this` a method reads when its body is one return statement that touches `$this` only through
+     * property fetches, as `return (string) $this->id;` or `return $this->id->toRfc4122();` do. Null for anything else.
+     *
+     * @return list<string>|null
+     */
+    public function getReadProperties(ClassReflection $class, string $name): ?array
+    {
+        $statements = $this->getMethod($class, $name)?->stmts;
+        if (null === $statements || 1 !== \count($statements) || !$statements[0] instanceof Return_ || null === $statements[0]->expr) {
+            return null;
+        }
+
+        $read = [];
+        $references = 0;
+        foreach ($this->nodes([$statements[0]->expr]) as $node) {
+            if ($node instanceof Expr\Closure || $node instanceof Expr\ArrowFunction || $node instanceof Expr\StaticCall
+                || $node instanceof Expr\StaticPropertyFetch || $node instanceof Expr\Include_ || $node instanceof Expr\Eval_) {
+                return null;
+            }
+            if ($node instanceof Variable && 'this' === $node->name) {
+                ++$references;
+            } elseif (($node instanceof PropertyFetch || $node instanceof Expr\NullsafePropertyFetch) && $node->var instanceof Variable && 'this' === $node->var->name) {
+                if (!$node->name instanceof Identifier) {
+                    return null;
+                }
+                $read[] = $node->name->toString();
+            }
+        }
+
+        // Every `$this` sits in a property fetch: no method call on it, no passing it on.
+        return [] !== $read && \count($read) === $references ? array_values(array_unique($read)) : null;
+    }
+
+    /**
      * The properties a method sets unconditionally from one of its parameters, as a setter does: `$this->customer = $customer;`.
      *
      * @return list<string>

@@ -326,15 +326,18 @@ final class AssociationAccess
                 return false;
             }
 
-            $property = null;
+            // Proxies keep their identifier without loading, so reading only identifier fields costs no query.
+            $properties = null;
             if (str_starts_with($use, 'property:')) {
-                $property = substr($use, 9);
+                $properties = [substr($use, 9)];
             } elseif (str_starts_with($use, 'method:') && $this->reflectionProvider->hasClass($targetEntity)) {
-                $property = $this->fetchedAssociations->getReturnedProperty($this->reflectionProvider->getClass($targetEntity), substr($use, 7));
+                $properties = $this->fetchedAssociations->getReadProperties($this->reflectionProvider->getClass($targetEntity), substr($use, 7));
             }
 
-            if (null === $property || !$metadata->isIdentifier($property) || $metadata->hasAssociation($property)) {
-                return false;
+            foreach ($properties ?? [''] as $property) {
+                if ('' === $property || !$metadata->isIdentifier($property) || $metadata->hasAssociation($property)) {
+                    return false;
+                }
             }
         }
 
