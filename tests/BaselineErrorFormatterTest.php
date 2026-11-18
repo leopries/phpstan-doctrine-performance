@@ -6,12 +6,22 @@ use Leopries\PHPStanDoctrinePerformance\BaselineErrorFormatter;
 use Leopries\PHPStanDoctrinePerformance\Severity;
 use PHPStan\Analyser\Error;
 use PHPStan\Command\AnalysisResult;
+use PHPStan\DependencyInjection\NeonAdapter;
 use PHPStan\Testing\ErrorFormatterTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /** @coversNothing */
 final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
 {
     private string $directory;
+    private string $file = 'baseline.neon';
+
+    /** @return iterable<string, array{string}> */
+    public static function formats(): iterable
+    {
+        yield 'neon' => ['baseline.neon'];
+        yield 'php' => ['baseline.php'];
+    }
 
     protected function setUp(): void
     {
@@ -21,13 +31,24 @@ final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
         $this->directory = (string) realpath($this->directory);
         touch($this->directory.'/src/A.php');
         touch($this->directory.'/src/B.php');
-        putenv(BaselineErrorFormatter::ENV_FILE.'='.$this->directory.'/baseline.php');
+    }
+
+    private function use(string $file): void
+    {
+        $this->file = $file;
+        putenv(BaselineErrorFormatter::ENV_FILE.'='.$this->path());
+    }
+
+    private function path(): string
+    {
+        return $this->directory.'/'.$this->file;
     }
 
     protected function tearDown(): void
     {
         putenv(BaselineErrorFormatter::ENV_FILE);
         @unlink($this->directory.'/baseline.php');
+        @unlink($this->directory.'/baseline.neon');
         @unlink($this->directory.'/src/A.php');
         @unlink($this->directory.'/src/B.php');
         @rmdir($this->directory.'/src');
@@ -35,8 +56,10 @@ final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
         parent::tearDown();
     }
 
-    public function testWritesOnlyDoctrineFindings(): void
+    #[DataProvider('formats')]
+    public function testWritesOnlyDoctrineFindings(string $file): void
     {
+        $this->use($file);
         $output = $this->format([], [
             $this->finding('Call to A::save() inside a loop executes a Doctrine query.', 'src/A.php'),
             $this->finding('Call to A::save() inside a loop executes a Doctrine query.', 'src/A.php'),
@@ -45,17 +68,19 @@ final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
             new Error('Not ignorable', $this->directory.'/src/A.php', 1, false, null, null, null, null, null, 'doctrine.queryInLoop', [Severity::METADATA_SCORE => 50]),
         ]);
 
-        self::assertStringContainsString('Wrote 3 Doctrine findings to '.$this->directory.'/baseline.php.', $output);
-        self::assertStringContainsString("includes:\n        - ".$this->directory.'/baseline.php', $output);
+        self::assertStringContainsString('Wrote 3 Doctrine findings to '.$this->path().'.', $output);
+        self::assertStringContainsString("includes:\n        - ".$this->path(), $output);
         self::assertSame([
             ['rawMessage' => 'Call to A::save() inside a loop executes a Doctrine query.', 'identifier' => 'doctrine.queryInLoop', 'count' => 2, 'path' => $this->directory.'/src/A.php'],
             ['rawMessage' => "It's in B", 'identifier' => 'doctrine.queryInNestedLoop', 'count' => 1, 'path' => $this->directory.'/src/B.php'],
         ], $this->baseline());
-        self::assertStringContainsString("'path' => __DIR__.'/src/A.php'", (string) file_get_contents($this->directory.'/baseline.php'));
+        self::assertStringContainsString('baseline.php' === $file ? "'path' => __DIR__.'/src/A.php'" : 'path: "src/A.php"', (string) file_get_contents($this->path()));
     }
 
-    public function testAddsToAnIncludedBaseline(): void
+    #[DataProvider('formats')]
+    public function testAddsToAnIncludedBaseline(string $file): void
     {
+        $this->use($file);
         $this->format([], [$this->finding('Old', 'src/A.php')]);
         $included = $this->baseline();
 
@@ -70,8 +95,10 @@ final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
         self::assertStringContainsString('No new Doctrine findings', $this->format($this->baseline(), []));
     }
 
-    public function testRewritesABaselineThatIsNotIncluded(): void
+    #[DataProvider('formats')]
+    public function testRewritesABaselineThatIsNotIncluded(string $file): void
     {
+        $this->use($file);
         $this->format([], [$this->finding('Old', 'src/A.php'), $this->finding('Fixed', 'src/A.php')]);
 
         // Not included, every finding shows up again: adding them would double the counts.
@@ -80,12 +107,35 @@ final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
         self::assertSame([['rawMessage' => 'Old', 'identifier' => 'doctrine.queryInLoop', 'count' => 1, 'path' => $this->directory.'/src/A.php']], $this->baseline());
     }
 
-    public function testLeavesAForeignFileAlone(): void
+    #[DataProvider('formats')]
+    public function testLeavesAForeignFileAlone(string $file): void
     {
-        file_put_contents($this->directory.'/baseline.php', "<?php return 'something else';\n");
+        $this->use($file);
+        $foreign = 'baseline.php' === $file ? "<?php return 'something else';\n" : "parameters:\n\tlevel: 5\n";
+        file_put_contents($this->path(), $foreign);
 
         $this->assertSame(1, (new BaselineErrorFormatter([]))->formatErrors(new AnalysisResult([$this->finding('A', 'src/A.php')], [], [], [], [], false, null, true, 0, false, []), $this->getOutput()));
-        self::assertSame("<?php return 'something else';\n", file_get_contents($this->directory.'/baseline.php'));
+        self::assertSame($foreign, file_get_contents($this->path()));
+    }
+
+    public function testDefaultsToNeon(): void
+    {
+        self::assertSame('phpstan-doctrine-baseline.neon', BaselineErrorFormatter::DEFAULT_FILE);
+    }
+
+    public function testNeonKeepsSpecialCharacters(): void
+    {
+        $this->use('baseline.neon');
+        $message = "@at 100% \"quoted\" back\\slash 'single' ünïcode";
+        $this->format([], [$this->finding($message, 'src/A.php')]);
+
+        // PHPStan's own loader reads the file; %% and a leading @@ become % and @ when the container is compiled.
+        $loaded = new NeonAdapter(['[parameters][ignoreErrors][][path]'])->load($this->path());
+        self::assertSame([['rawMessage' => "@@at 100%% \"quoted\" back\\slash 'single' ünïcode", 'identifier' => 'doctrine.queryInLoop', 'count' => 1, 'path' => $this->directory.'/src/A.php']], $loaded['parameters']['ignoreErrors']);
+
+        // Read back while included, the message matches and the file stays as it is.
+        self::assertStringContainsString('No new Doctrine findings', $this->format($this->baseline(), []));
+        self::assertSame([$message], array_column($this->baseline(), 'rawMessage'));
     }
 
     /**
@@ -100,13 +150,20 @@ final class BaselineErrorFormatterTest extends ErrorFormatterTestCase
         return substr($this->getOutputContent(), \strlen($before));
     }
 
-    /** @return mixed */
+    /** @return mixed the entries as the DI container sees them */
     private function baseline(): mixed
     {
-        $data = require $this->directory.'/baseline.php';
-        self::assertIsArray($data);
+        if ('baseline.php' === $this->file) {
+            $data = require $this->path();
+            self::assertIsArray($data);
 
-        return $data['parameters']['ignoreErrors'];
+            return $data['parameters']['ignoreErrors'];
+        }
+
+        $data = new NeonAdapter(['[parameters][ignoreErrors][][path]'])->load($this->path());
+        $unescape = static fn (mixed $value): mixed => \is_string($value) ? preg_replace('/^@@/', '@', str_replace('%%', '%', $value)) : $value;
+
+        return array_map(static fn (array $entry): array => array_map($unescape, $entry), $data['parameters']['ignoreErrors']);
     }
 
     private function finding(string $message, string $file, string $identifier = 'doctrine.queryInLoop'): Error

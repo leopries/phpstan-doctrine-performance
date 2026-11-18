@@ -8,7 +8,8 @@ use PHPStan\Command\Output;
 
 /**
  * Accepts the Doctrine findings of a run: `phpstan analyse --error-format=doctrineBaseline` writes them to their own
- * baseline file, phpstan-doctrine-baseline.php or DOCTRINE_BASELINE_FILE. Other PHPStan errors are left out.
+ * baseline file, phpstan-doctrine-baseline.neon or DOCTRINE_BASELINE_FILE. Other PHPStan errors are left out. A file
+ * ending in .php is written as a PHP baseline, any other as NEON.
  *
  * Once the file is included, accepted findings no longer show up, so the next run adds only new ones to it.
  * While it is not included, every finding shows up and the file is written from scratch, so counts never double.
@@ -18,7 +19,7 @@ use PHPStan\Command\Output;
 final class BaselineErrorFormatter implements ErrorFormatter
 {
     public const string ENV_FILE = 'DOCTRINE_BASELINE_FILE';
-    public const string DEFAULT_FILE = 'phpstan-doctrine-baseline.php';
+    public const string DEFAULT_FILE = 'phpstan-doctrine-baseline.neon';
     public const string COMMAND = 'vendor/bin/phpstan analyse --error-format=doctrineBaseline';
 
     /** @param array<mixed> $ignoreErrors the ignoreErrors parameter of the running configuration */
@@ -60,7 +61,7 @@ final class BaselineErrorFormatter implements ErrorFormatter
         }
 
         ksort($entries, \SORT_STRING);
-        file_put_contents($file, self::export(array_values($entries), \dirname($file)));
+        file_put_contents($file, self::export($file, array_values($entries)));
         $output->writeLineFormatted(\sprintf(
             '%s %d Doctrine %s to %s.', $included ? 'Added' : 'Wrote', $added, 1 === $added ? 'finding' : 'findings', self::display($file),
         ));
@@ -81,7 +82,7 @@ final class BaselineErrorFormatter implements ErrorFormatter
         $file = '' === $file ? self::DEFAULT_FILE : $file;
         $cwd = getcwd();
 
-        $file = str_starts_with($file, '/') || false === $cwd || 1 === preg_match('#^[A-Za-z]:[\\\/]#', $file) ? $file : $cwd.'/'.$file;
+        $file = false === $cwd || self::isAbsolute($file) ? $file : $cwd.'/'.$file;
 
         return self::normalize(\dirname($file)).'/'.basename($file);
     }
@@ -102,12 +103,16 @@ final class BaselineErrorFormatter implements ErrorFormatter
         return false !== $cwd && str_starts_with($file, $cwd.'/') ? substr($file, \strlen($cwd) + 1) : $file;
     }
 
+    private static function isPhp(string $file): bool
+    {
+        return str_ends_with(strtolower($file), '.php');
+    }
+
     /** @return list<Entry>|null null when the file is not a baseline */
     private static function read(string $file): ?array
     {
-        $data = (static fn (): mixed => require $file)();
-        $errors = \is_array($data) && \is_array($data['parameters'] ?? null) ? ($data['parameters']['ignoreErrors'] ?? []) : null;
-        if (!\is_array($errors)) {
+        $errors = self::isPhp($file) ? self::readPhp($file) : self::readNeon($file);
+        if (null === $errors) {
             return null;
         }
 
@@ -120,6 +125,64 @@ final class BaselineErrorFormatter implements ErrorFormatter
         }
 
         return $entries;
+    }
+
+    /** @return array<mixed>|null */
+    private static function readPhp(string $file): ?array
+    {
+        $data = (static fn (): mixed => require $file)();
+        $errors = \is_array($data) && \is_array($data['parameters'] ?? null) ? ($data['parameters']['ignoreErrors'] ?? []) : null;
+
+        return \is_array($errors) ? $errors : null;
+    }
+
+    /**
+     * Reads back the NEON this formatter writes; PHPStan's own NEON parser is scoped inside its phar and no API.
+     * Anything else, even valid NEON, is not taken for a baseline, so the file is left alone.
+     *
+     * @return list<array<string, int|string>>|null
+     */
+    private static function readNeon(string $file): ?array
+    {
+        $lines = preg_split('/\R/', (string) file_get_contents($file));
+        $lines = array_values(array_filter(
+            false === $lines ? [] : $lines,
+            static fn (string $line): bool => '' !== trim($line) && !str_starts_with(ltrim($line), '#'),
+        ));
+        if ('parameters:' !== rtrim($lines[0] ?? '') || 1 !== preg_match('/^\s+ignoreErrors:\s*(\[\])?$/', $lines[1] ?? '', $match)) {
+            return null;
+        }
+        if (isset($match[1])) {
+            return 2 === \count($lines) ? [] : null;
+        }
+
+        $errors = [];
+        foreach (\array_slice($lines, 2) as $line) {
+            if (1 === preg_match('/^\s+-$/', $line)) {
+                $errors[] = [];
+                continue;
+            }
+            if ([] === $errors || 1 !== preg_match('/^\s+(rawMessage|identifier|count|path):\s+("(?:[^"\\\\]|\\\\.)*"|\d+)$/', $line, $match)) {
+                return null;
+            }
+            $value = '"' === $match[2][0] ? json_decode($match[2]) : (int) $match[2];
+            if (!\is_string($value) && !\is_int($value)) {
+                return null;
+            }
+            if (\is_string($value)) {
+                $value = preg_replace('/^@@/', '@', str_replace('%%', '%', $value)) ?? $value;
+            }
+            // PHPStan resolves a relative path against the directory of the NEON file that contains it.
+            $errors[array_key_last($errors)][$match[1]] = 'path' === $match[1] && \is_string($value) && !self::isAbsolute($value)
+                ? \dirname($file).'/'.$value : $value;
+        }
+
+        return $errors;
+    }
+
+    private static function isAbsolute(string $path): bool
+    {
+        return str_starts_with($path, '/') || 1 === preg_match('#^[A-Za-z]:[\\\\/]#', $path);
     }
 
     /** @param Entry $entry */
@@ -147,7 +210,36 @@ final class BaselineErrorFormatter implements ErrorFormatter
     }
 
     /** @param list<Entry> $entries */
-    private static function export(array $entries, string $directory): string
+    private static function export(string $file, array $entries): string
+    {
+        return self::isPhp($file) ? self::exportPhp($entries, \dirname($file)) : self::exportNeon($entries, \dirname($file));
+    }
+
+    /** @param list<Entry> $entries */
+    private static function exportNeon(array $entries, string $directory): string
+    {
+        $neon = '# Accepted Doctrine performance findings, written by: '.self::COMMAND."\n"
+            ."# PHPStan reports entries that no longer match; delete those, or the whole list to start over.\n\n"
+            ."parameters:\n\tignoreErrors:".([] === $entries ? " []\n" : "\n");
+        foreach ($entries as $entry) {
+            $path = str_starts_with($entry['path'], $directory.'/') ? substr($entry['path'], \strlen($directory) + 1) : $entry['path'];
+            $neon .= \sprintf(
+                "\t\t-\n\t\t\trawMessage: %s\n\t\t\tidentifier: %s\n\t\t\tcount: %d\n\t\t\tpath: %s\n",
+                self::neonString($entry['rawMessage']), self::neonString($entry['identifier']), $entry['count'], self::neonString($path),
+            );
+        }
+
+        return $neon;
+    }
+
+    /** A double-quoted NEON string, escaped like JSON; `%` and a leading `@` are doubled for the DI container. */
+    private static function neonString(string $value): string
+    {
+        return json_encode(preg_replace('#^@|%#', '$0$0', $value), \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE | \JSON_THROW_ON_ERROR);
+    }
+
+    /** @param list<Entry> $entries */
+    private static function exportPhp(array $entries, string $directory): string
     {
         $php = "<?php declare(strict_types=1);\n\n"
             .'// Accepted Doctrine performance findings, written by: '.self::COMMAND."\n"

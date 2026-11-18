@@ -201,19 +201,21 @@ To accept the current findings, so only new ones fail the build:
 vendor/bin/phpstan analyse --error-format=doctrineBaseline
 ```
 
-It writes only the Doctrine findings to `phpstan-doctrine-baseline.php`, apart
+It writes only the Doctrine findings to `phpstan-doctrine-baseline.neon`, apart
 from your regular PHPStan baseline, and tells you to include the file once:
 
 ```neon
 includes:
-    - phpstan-doctrine-baseline.php
+    - phpstan-doctrine-baseline.neon
 ```
 
 Run the same command again after new findings appear: once the file is
 included, the accepted findings no longer show up, so it adds only the new ones.
 While the file is not included, it is written from scratch, so counts never
 double. Pass your usual `-c` and paths; `DOCTRINE_BASELINE_FILE=path` picks
-another file. The tip of every finding and the reports name the command;
+another file, written as a PHP baseline when its name ends in `.php`
+(`DOCTRINE_BASELINE_FILE=phpstan-doctrine-baseline.php` keeps the file of
+versions before 0.4). The tip of every finding and the reports name the command;
 `baselineTip: false` removes it from the tips.
 
 ## Introducing it to an existing project
