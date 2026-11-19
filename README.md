@@ -1,5 +1,11 @@
 # PHPStan Doctrine Performance
 
+[![CI](https://github.com/leopries/phpstan-doctrine-performance/actions/workflows/ci.yml/badge.svg)](https://github.com/leopries/phpstan-doctrine-performance/actions/workflows/ci.yml)
+[![Latest Version](https://img.shields.io/packagist/v/leopries/phpstan-doctrine-performance.svg)](https://packagist.org/packages/leopries/phpstan-doctrine-performance)
+[![Total Downloads](https://img.shields.io/packagist/dt/leopries/phpstan-doctrine-performance.svg)](https://packagist.org/packages/leopries/phpstan-doctrine-performance)
+[![PHP Version](https://img.shields.io/packagist/dependency-v/leopries/phpstan-doctrine-performance/php.svg)](https://packagist.org/packages/leopries/phpstan-doctrine-performance)
+[![License](https://img.shields.io/packagist/l/leopries/phpstan-doctrine-performance.svg)](LICENSE)
+
 PHPStan rules that find Doctrine N+1 and N×M query patterns without running the
 application, rank every finding by severity and group the findings by cause.
 
@@ -298,3 +304,10 @@ These are potential performance findings, not proof of SQL counts.
 composer install
 composer check    # tests and self-analysis
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report a missed or false
+finding and [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

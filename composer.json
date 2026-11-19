@@ -3,6 +3,18 @@
     "description": "PHPStan rules that find Doctrine N+1 and N×M query patterns, rank them by severity and group them by cause.",
     "type": "phpstan-extension",
     "license": "MIT",
+    "homepage": "https://github.com/leopries/phpstan-doctrine-performance",
+    "authors": [
+        {
+            "name": "Leonard Pries",
+            "homepage": "https://github.com/leopries"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/leopries/phpstan-doctrine-performance/issues",
+        "source": "https://github.com/leopries/phpstan-doctrine-performance",
+        "security": "https://github.com/leopries/phpstan-doctrine-performance/security/policy"
+    },
     "keywords": ["phpstan", "doctrine", "orm", "n-plus-one", "performance", "static analysis"],
     "require": {
         "php": "^8.4",
